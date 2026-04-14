@@ -2,9 +2,12 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QDebug>
 #include <QLocale>
 #include <QMessageBox>
 #include <QTranslator>
+
+#include <memory>
 
 int main(int argc, char *argv[])
 {
@@ -28,7 +31,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    MainWindow w;
-    w.show();
+    auto window = std::make_unique<MainWindow>();
+    qDebug() << "Showing main window";
+    window->show();
     return QCoreApplication::exec();
 }

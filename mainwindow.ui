@@ -6,21 +6,200 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
-    <height>600</height>
+    <width>920</width>
+    <height>680</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>订单录入</string>
   </property>
-  <widget class="QWidget" name="centralwidget"/>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QGroupBox" name="orderInputGroupBox">
+      <property name="title">
+       <string>订单录入</string>
+      </property>
+      <layout class="QVBoxLayout" name="orderInputLayout">
+       <item>
+        <layout class="QGridLayout" name="formGridLayout">
+         <item row="0" column="0">
+          <widget class="QLabel" name="orderDateLabel">
+           <property name="text">
+            <string>订单日期</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QDateEdit" name="orderDateEdit">
+           <property name="calendarPopup">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="customerNameLabel">
+           <property name="text">
+            <string>客户名称</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="3">
+          <widget class="QLineEdit" name="customerNameLineEdit"/>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="productModelLabel">
+           <property name="text">
+            <string>产品型号</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QComboBox" name="productModelComboBox"/>
+         </item>
+         <item row="1" column="2">
+          <widget class="QLabel" name="templateLabel">
+           <property name="text">
+            <string>配置模板</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="3">
+          <widget class="QComboBox" name="templateComboBox"/>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="quantitySetsLabel">
+           <property name="text">
+            <string>订单套数</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QSpinBox" name="quantitySetsSpinBox">
+           <property name="maximum">
+            <number>999999</number>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="2">
+          <widget class="QLabel" name="unitPriceLabel">
+           <property name="text">
+            <string>单价</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="3">
+          <widget class="QDoubleSpinBox" name="unitPriceDoubleSpinBox">
+           <property name="maximum">
+            <double>9999999.99000000022351742</double>
+           </property>
+           <property name="singleStep">
+            <double>100.00000000000000000</double>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="configurationModeLayout">
+         <item>
+          <widget class="QLabel" name="configurationModeLabel">
+           <property name="text">
+            <string>配置方式</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QRadioButton" name="templateConfigurationRadioButton">
+           <property name="text">
+            <string>模板配置</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QRadioButton" name="customConfigurationRadioButton">
+           <property name="text">
+            <string>自定义配置</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="modeSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="componentsGroupBox">
+      <property name="title">
+       <string>订单组件</string>
+      </property>
+      <layout class="QVBoxLayout" name="componentsLayout">
+       <item>
+        <widget class="QTableWidget" name="componentTableWidget"/>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="componentButtonLayout">
+         <item>
+          <widget class="QPushButton" name="addComponentButton">
+           <property name="text">
+            <string>新增组件</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="removeComponentButton">
+           <property name="text">
+            <string>删除选中</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="componentSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="saveOrderButton">
+           <property name="text">
+            <string>保存订单</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
   <widget class="QMenuBar" name="menubar">
    <property name="geometry">
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>800</width>
-     <height>18</height>
+     <width>920</width>
+     <height>22</height>
     </rect>
    </property>
   </widget>

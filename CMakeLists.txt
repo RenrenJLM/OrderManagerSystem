@@ -11,6 +11,7 @@ set(PROJECT_DOCS
     plan.md
     AGENTS.md
     README.md
+    development_log.md
 )
 
 # ADDED: mark docs as non-compilable files, only for IDE display
