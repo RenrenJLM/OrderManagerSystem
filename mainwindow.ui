@@ -6,370 +6,509 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>920</width>
-    <height>680</height>
+    <width>1180</width>
+    <height>920</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>订单录入</string>
+   <string>订单管理系统</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
-     <widget class="QGroupBox" name="orderInputGroupBox">
-      <property name="title">
-       <string>订单录入</string>
+     <widget class="QTabWidget" name="mainTabWidget">
+      <property name="currentIndex">
+       <number>0</number>
       </property>
-      <layout class="QVBoxLayout" name="orderInputLayout">
-       <item>
-        <layout class="QGridLayout" name="formGridLayout">
-         <item row="0" column="0">
-          <widget class="QLabel" name="orderDateLabel">
-           <property name="text">
-            <string>订单日期</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1">
-          <widget class="QDateEdit" name="orderDateEdit">
-           <property name="calendarPopup">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="2">
-          <widget class="QLabel" name="customerNameLabel">
-           <property name="text">
-            <string>客户名称</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="3">
-          <widget class="QLineEdit" name="customerNameLineEdit"/>
-         </item>
-         <item row="1" column="0">
-          <widget class="QLabel" name="productModelLabel">
-           <property name="text">
-            <string>产品型号</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1">
-          <widget class="QComboBox" name="productModelComboBox"/>
-         </item>
-         <item row="1" column="2">
-          <widget class="QLabel" name="templateLabel">
-           <property name="text">
-            <string>配置模板</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="3">
-          <widget class="QComboBox" name="templateComboBox"/>
-         </item>
-         <item row="2" column="0">
-          <widget class="QLabel" name="quantitySetsLabel">
-           <property name="text">
-            <string>订单套数</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="1">
-          <widget class="QSpinBox" name="quantitySetsSpinBox">
-           <property name="maximum">
-            <number>999999</number>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="2">
-          <widget class="QLabel" name="bodyUnitPriceLabel">
-           <property name="text">
-            <string>主体单价</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="3">
-          <widget class="QDoubleSpinBox" name="bodyUnitPriceDoubleSpinBox">
-           <property name="maximum">
-            <double>9999999.99000000022351742</double>
-           </property>
-           <property name="singleStep">
-            <double>100.00000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="0">
-          <widget class="QLabel" name="unitPriceLabel">
-           <property name="text">
-            <string>单套总价</string>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="1">
-          <widget class="QDoubleSpinBox" name="unitPriceDoubleSpinBox">
-           <property name="maximum">
-            <double>9999999.99000000022351742</double>
-           </property>
-           <property name="singleStep">
-            <double>100.00000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="2" colspan="2">
-          <spacer name="priceRowSpacer">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>40</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="configurationModeLayout">
-         <item>
-          <widget class="QLabel" name="configurationModeLabel">
-           <property name="text">
-            <string>配置方式</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QRadioButton" name="templateConfigurationRadioButton">
-           <property name="text">
-            <string>模板配置</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QRadioButton" name="customConfigurationRadioButton">
-           <property name="text">
-            <string>自定义配置</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <spacer name="modeSpacer">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>40</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-        </layout>
-       </item>
-      </layout>
-     </widget>
-    </item>
-    <item>
-     <widget class="QGroupBox" name="componentsGroupBox">
-      <property name="title">
-       <string>订单组件</string>
-      </property>
-      <layout class="QVBoxLayout" name="componentsLayout">
-       <item>
-        <widget class="QTableWidget" name="componentTableWidget"/>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="componentButtonLayout">
-         <item>
-          <widget class="QPushButton" name="addComponentButton">
-           <property name="text">
-            <string>新增组件</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="removeComponentButton">
-           <property name="text">
-            <string>删除选中</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <spacer name="componentSpacer">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>40</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-         <item>
-          <widget class="QPushButton" name="saveOrderButton">
-           <property name="text">
-            <string>保存订单</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-      </layout>
-     </widget>
-    </item>
-    <item>
-     <widget class="QGroupBox" name="shipmentGroupBox">
-      <property name="title">
-       <string>发货登记</string>
-      </property>
-      <layout class="QVBoxLayout" name="shipmentLayout">
-       <item>
-        <layout class="QGridLayout" name="shipmentFormLayout">
-         <item row="0" column="0">
-          <widget class="QLabel" name="shipmentOrderLabel">
-           <property name="text">
-            <string>选择订单</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1" colspan="3">
-          <widget class="QComboBox" name="shipmentOrderComboBox"/>
-         </item>
-         <item row="1" column="0">
-          <widget class="QLabel" name="shipmentDateLabel">
-           <property name="text">
-            <string>发货日期</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1">
-          <widget class="QDateEdit" name="shipmentDateEdit">
-           <property name="calendarPopup">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="2">
-          <widget class="QLabel" name="shipmentStatusLabel">
-           <property name="text">
-            <string>订单状态</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="3">
-          <widget class="QLabel" name="shipmentOrderStatusValueLabel">
-           <property name="text">
-            <string>请先选择订单</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="0">
-          <widget class="QLabel" name="shipmentSetsLabel">
-           <property name="text">
-            <string>订单发货套数</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="1">
-          <widget class="QSpinBox" name="shipmentSetsSpinBox">
-           <property name="maximum">
-            <number>999999</number>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="2">
-          <widget class="QLabel" name="shipmentOrderNoteLabel">
-           <property name="text">
-            <string>订单发货备注</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="3">
-          <widget class="QLineEdit" name="shipmentOrderNoteLineEdit"/>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="shipmentOrderButtonLayout">
-         <item>
-          <spacer name="shipmentOrderSpacer">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>40</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-         <item>
-          <widget class="QPushButton" name="saveOrderShipmentButton">
-           <property name="text">
-            <string>保存订单发货</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <widget class="QTableWidget" name="shipmentComponentTableWidget"/>
-       </item>
-       <item>
-        <layout class="QGridLayout" name="componentShipmentFormLayout">
-         <item row="0" column="0">
-          <widget class="QLabel" name="selectedComponentLabel">
-           <property name="text">
-            <string>选中组件</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1">
-          <widget class="QLabel" name="selectedComponentValueLabel">
-           <property name="text">
-            <string>未选择</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="2">
-          <widget class="QLabel" name="componentShipmentQuantityLabel">
-           <property name="text">
-            <string>组件发货数量</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="3">
-          <widget class="QSpinBox" name="componentShipmentQuantitySpinBox">
-           <property name="maximum">
-            <number>999999</number>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="0">
-          <widget class="QLabel" name="componentShipmentNoteLabel">
-           <property name="text">
-            <string>组件发货备注</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1" colspan="2">
-          <widget class="QLineEdit" name="componentShipmentNoteLineEdit"/>
-         </item>
-         <item row="1" column="3">
-          <widget class="QPushButton" name="saveComponentShipmentButton">
-           <property name="text">
-            <string>保存组件发货</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-      </layout>
+      <widget class="QWidget" name="orderEntryTab">
+       <attribute name="title">
+        <string>订单录入</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="orderEntryTabLayout">
+        <item>
+         <widget class="QGroupBox" name="orderInputGroupBox">
+          <property name="title">
+           <string>订单录入</string>
+          </property>
+          <layout class="QVBoxLayout" name="orderInputLayout">
+           <item>
+            <layout class="QGridLayout" name="formGridLayout">
+             <item row="0" column="0">
+              <widget class="QLabel" name="orderDateLabel">
+               <property name="text">
+                <string>订单日期</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDateEdit" name="orderDateEdit">
+               <property name="calendarPopup">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="2">
+              <widget class="QLabel" name="customerNameLabel">
+               <property name="text">
+                <string>客户名称</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QLineEdit" name="customerNameLineEdit"/>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="productModelLabel">
+               <property name="text">
+                <string>产品型号</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QComboBox" name="productModelComboBox"/>
+             </item>
+             <item row="1" column="2">
+              <widget class="QLabel" name="templateLabel">
+               <property name="text">
+                <string>配置模板</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="3">
+              <widget class="QComboBox" name="templateComboBox"/>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="quantitySetsLabel">
+               <property name="text">
+                <string>订单套数</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QSpinBox" name="quantitySetsSpinBox">
+               <property name="maximum">
+                <number>999999</number>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="2">
+              <widget class="QLabel" name="bodyUnitPriceLabel">
+               <property name="text">
+                <string>主体单价</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="3">
+              <widget class="QDoubleSpinBox" name="bodyUnitPriceDoubleSpinBox">
+               <property name="maximum">
+                <double>9999999.99000000022351742</double>
+               </property>
+               <property name="singleStep">
+                <double>100.00000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="unitPriceLabel">
+               <property name="text">
+                <string>单套总价</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="unitPriceDoubleSpinBox">
+               <property name="maximum">
+                <double>9999999.99000000022351742</double>
+               </property>
+               <property name="singleStep">
+                <double>100.00000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="2" colspan="2">
+              <spacer name="priceRowSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="configurationModeLayout">
+             <item>
+              <widget class="QLabel" name="configurationModeLabel">
+               <property name="text">
+                <string>配置方式</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QRadioButton" name="templateConfigurationRadioButton">
+               <property name="text">
+                <string>模板配置</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QRadioButton" name="customConfigurationRadioButton">
+               <property name="text">
+                <string>自定义配置</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="modeSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="componentsGroupBox">
+          <property name="title">
+           <string>订单组件</string>
+          </property>
+          <layout class="QVBoxLayout" name="componentsLayout">
+           <item>
+            <widget class="QTableWidget" name="componentTableWidget"/>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="componentButtonLayout">
+             <item>
+              <widget class="QPushButton" name="addComponentButton">
+               <property name="text">
+                <string>新增组件</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="removeComponentButton">
+               <property name="text">
+                <string>删除选中</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="componentSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="saveOrderButton">
+               <property name="text">
+                <string>保存订单</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="shipmentTab">
+       <attribute name="title">
+        <string>发货登记</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="shipmentTabLayout">
+        <item>
+         <widget class="QGroupBox" name="shipmentGroupBox">
+          <property name="title">
+           <string>发货登记</string>
+          </property>
+          <layout class="QVBoxLayout" name="shipmentLayout">
+           <item>
+            <layout class="QGridLayout" name="shipmentFormLayout">
+             <item row="0" column="0">
+              <widget class="QLabel" name="shipmentOrderLabel">
+               <property name="text">
+                <string>选择订单</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1" colspan="3">
+              <widget class="QComboBox" name="shipmentOrderComboBox"/>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="shipmentDateLabel">
+               <property name="text">
+                <string>发货日期</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDateEdit" name="shipmentDateEdit">
+               <property name="calendarPopup">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="2">
+              <widget class="QLabel" name="shipmentStatusLabel">
+               <property name="text">
+                <string>订单状态</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="3">
+              <widget class="QLabel" name="shipmentOrderStatusValueLabel">
+               <property name="text">
+                <string>请先选择订单</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="shipmentSetsLabel">
+               <property name="text">
+                <string>订单发货套数</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QSpinBox" name="shipmentSetsSpinBox">
+               <property name="maximum">
+                <number>999999</number>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="2">
+              <widget class="QLabel" name="shipmentOrderNoteLabel">
+               <property name="text">
+                <string>订单发货备注</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="3">
+              <widget class="QLineEdit" name="shipmentOrderNoteLineEdit"/>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="shipmentOrderButtonLayout">
+             <item>
+              <spacer name="shipmentOrderSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="saveOrderShipmentButton">
+               <property name="text">
+                <string>保存订单发货</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QTableWidget" name="shipmentComponentTableWidget"/>
+           </item>
+           <item>
+            <layout class="QGridLayout" name="componentShipmentFormLayout">
+             <item row="0" column="0">
+              <widget class="QLabel" name="selectedComponentLabel">
+               <property name="text">
+                <string>选中组件</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QLabel" name="selectedComponentValueLabel">
+               <property name="text">
+                <string>未选择</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="2">
+              <widget class="QLabel" name="componentShipmentQuantityLabel">
+               <property name="text">
+                <string>组件发货数量</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QSpinBox" name="componentShipmentQuantitySpinBox">
+               <property name="maximum">
+                <number>999999</number>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="componentShipmentNoteLabel">
+               <property name="text">
+                <string>组件发货备注</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1" colspan="2">
+              <widget class="QLineEdit" name="componentShipmentNoteLineEdit"/>
+             </item>
+             <item row="1" column="3">
+              <widget class="QPushButton" name="saveComponentShipmentButton">
+               <property name="text">
+                <string>保存组件发货</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="queryTab">
+       <attribute name="title">
+        <string>订单查询</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="queryTabLayout">
+        <item>
+         <widget class="QGroupBox" name="queryGroupBox">
+          <property name="title">
+           <string>订单查询</string>
+          </property>
+          <layout class="QVBoxLayout" name="queryLayout">
+           <item>
+            <layout class="QGridLayout" name="queryFilterLayout">
+             <item row="0" column="0">
+              <widget class="QLabel" name="queryCustomerLabel">
+               <property name="text">
+                <string>客户名称</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QLineEdit" name="queryCustomerLineEdit"/>
+             </item>
+             <item row="0" column="2">
+              <widget class="QLabel" name="queryProductModelLabel">
+               <property name="text">
+                <string>产品型号</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QComboBox" name="queryProductModelComboBox"/>
+             </item>
+             <item row="0" column="4">
+              <widget class="QCheckBox" name="queryOnlyUnfinishedCheckBox">
+               <property name="text">
+                <string>仅未完成</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="5">
+              <widget class="QPushButton" name="querySearchButton">
+               <property name="text">
+                <string>查询</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="6">
+              <widget class="QPushButton" name="queryResetButton">
+               <property name="text">
+                <string>重置</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="7">
+              <spacer name="queryFilterSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item row="0" column="8">
+              <widget class="QLabel" name="queryOrderCountLabel">
+               <property name="text">
+                <string>订单数</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="9">
+              <widget class="QLabel" name="queryOrderCountValueLabel">
+               <property name="text">
+                <string>0</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QTableWidget" name="orderListTableWidget"/>
+           </item>
+           <item>
+            <widget class="QSplitter" name="orderDetailSplitter">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <widget class="QGroupBox" name="orderComponentDetailGroupBox">
+              <property name="title">
+               <string>订单组件明细</string>
+              </property>
+              <layout class="QVBoxLayout" name="orderComponentDetailLayout">
+               <item>
+                <widget class="QTableWidget" name="orderDetailComponentTableWidget"/>
+               </item>
+              </layout>
+             </widget>
+             <widget class="QGroupBox" name="orderShipmentHistoryGroupBox">
+              <property name="title">
+               <string>发货记录</string>
+              </property>
+              <layout class="QVBoxLayout" name="orderShipmentHistoryLayout">
+               <item>
+                <widget class="QTableWidget" name="orderShipmentHistoryTableWidget"/>
+               </item>
+              </layout>
+             </widget>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>
@@ -379,7 +518,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>920</width>
+     <width>1180</width>
      <height>22</height>
     </rect>
    </property>

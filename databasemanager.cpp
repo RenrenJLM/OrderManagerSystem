@@ -46,7 +46,7 @@ bool DatabaseManager::ensureMinimumDemoData()
     }
 
     if (countQuery.value(0).toInt() > 0) {
-        return true;
+        return ensureMinimumComponentCatalogData(database);
     }
 
     if (!database.transaction()) {
@@ -154,6 +154,11 @@ bool DatabaseManager::ensureMinimumDemoData()
         return false;
     }
 
+    if (!ensureMinimumComponentCatalogData(database)) {
+        database.rollback();
+        return false;
+    }
+
     if (!database.commit()) {
         m_lastError = database.lastError().text();
         database.rollback();
@@ -184,6 +189,33 @@ QList<ProductModelOption> DatabaseManager::productModels()
     }
 
     return models;
+}
+
+QList<ProductComponentOption> DatabaseManager::productModelComponents(int productModelId)
+{
+    QList<ProductComponentOption> components;
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT id, component_name, unit_price "
+        "FROM product_model_components "
+        "WHERE product_model_id = ? "
+        "ORDER BY component_name ASC;"));
+    query.addBindValue(productModelId);
+
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return components;
+    }
+
+    while (query.next()) {
+        ProductComponentOption component;
+        component.id = query.value(0).toInt();
+        component.name = query.value(1).toString();
+        component.unitPrice = query.value(2).toDouble();
+        components.append(component);
+    }
+
+    return components;
 }
 
 QList<TemplateOption> DatabaseManager::optionTemplatesForProduct(int productModelId)
@@ -247,18 +279,15 @@ bool DatabaseManager::saveOrder(const OrderSaveData &orderData,
     }
 
     QSqlDatabase database = QSqlDatabase::database(kConnectionName);
-    QString priceError;
-    const double bodyUnitPrice =
-        productDefaultPrice(database, orderData.productModelName, &priceError);
-    if (!priceError.isEmpty()) {
-        m_lastError = priceError;
+    if (orderData.bodyUnitPrice < 0.0) {
+        m_lastError = QStringLiteral("主体单价不能小于 0。");
         return false;
     }
 
     OrderComponentData bodyComponent;
     bodyComponent.componentName = bodyComponentName(orderData.productModelName);
     bodyComponent.quantityPerSet = 1;
-    bodyComponent.unitPrice = bodyUnitPrice;
+    bodyComponent.unitPrice = orderData.bodyUnitPrice;
     bodyComponent.sourceType = QString::fromLatin1(kBodySourceType);
     normalizedComponents.prepend(bodyComponent);
 
@@ -328,6 +357,113 @@ bool DatabaseManager::saveOrder(const OrderSaveData &orderData,
     }
 
     return true;
+}
+
+QList<ShipmentOrderSummary> DatabaseManager::queryOrders(const QString &customerKeyword,
+                                                         const QString &productModelName,
+                                                         bool onlyUnfinished)
+{
+    QList<ShipmentOrderSummary> orders;
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+
+    QString statement = QStringLiteral(
+        "SELECT oi.id, oi.order_date, oi.customer_name, oi.product_model, "
+        "oi.configuration_name, oi.quantity_sets, oi.shipped_sets, oi.unshipped_sets, "
+        "oi.unit_price, "
+        "CASE "
+        "WHEN COALESCE((SELECT MAX(unshipped_quantity) "
+        "               FROM order_item_components oic "
+        "               WHERE oic.order_item_id = oi.id), 0) = 0 "
+        "THEN 1 ELSE 0 END AS is_completed "
+        "FROM order_items oi");
+
+    QStringList conditions;
+    QList<QVariant> bindValues;
+
+    if (!customerKeyword.trimmed().isEmpty()) {
+        conditions.append(QStringLiteral("oi.customer_name LIKE ?"));
+        bindValues.append(QStringLiteral("%") + customerKeyword.trimmed() + QStringLiteral("%"));
+    }
+
+    if (!productModelName.trimmed().isEmpty()) {
+        conditions.append(QStringLiteral("oi.product_model = ?"));
+        bindValues.append(productModelName.trimmed());
+    }
+
+    if (onlyUnfinished) {
+        conditions.append(QStringLiteral(
+            "COALESCE((SELECT MAX(unshipped_quantity) "
+            "          FROM order_item_components oic "
+            "          WHERE oic.order_item_id = oi.id), 0) > 0"));
+    }
+
+    if (!conditions.isEmpty()) {
+        statement += QStringLiteral(" WHERE ") + conditions.join(QStringLiteral(" AND "));
+    }
+    statement += QStringLiteral(" ORDER BY oi.id DESC;");
+
+    query.prepare(statement);
+    for (const QVariant &value : bindValues) {
+        query.addBindValue(value);
+    }
+
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return orders;
+    }
+
+    while (query.next()) {
+        ShipmentOrderSummary order;
+        order.id = query.value(0).toInt();
+        order.orderDate = query.value(1).toString();
+        order.customerName = query.value(2).toString();
+        order.productModelName = query.value(3).toString();
+        order.configurationName = query.value(4).toString();
+        order.quantitySets = query.value(5).toInt();
+        order.shippedSets = query.value(6).toInt();
+        order.unshippedSets = query.value(7).toInt();
+        order.unitPrice = query.value(8).toDouble();
+        order.isCompleted = query.value(9).toInt() == 1;
+        order.totalPrice = static_cast<double>(order.quantitySets) * order.unitPrice;
+        orders.append(order);
+    }
+
+    return orders;
+}
+
+QList<ShipmentComponentStatus> DatabaseManager::orderComponents(int orderItemId)
+{
+    return shipmentComponents(orderItemId);
+}
+
+QList<OrderShipmentRecord> DatabaseManager::orderShipments(int orderItemId)
+{
+    QList<OrderShipmentRecord> records;
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT shipment_date, "
+        "CASE WHEN order_item_component_id IS NULL THEN '订单级' ELSE '组件级' END, "
+        "shipment_quantity, COALESCE(note, '') "
+        "FROM shipment_records "
+        "WHERE order_item_id = ? "
+        "ORDER BY id ASC;"));
+    query.addBindValue(orderItemId);
+
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return records;
+    }
+
+    while (query.next()) {
+        OrderShipmentRecord record;
+        record.shipmentDate = query.value(0).toString();
+        record.shipmentType = query.value(1).toString();
+        record.shipmentQuantity = query.value(2).toInt();
+        record.note = query.value(3).toString();
+        records.append(record);
+    }
+
+    return records;
 }
 
 QList<ShipmentOrderSummary> DatabaseManager::shipmentOrders()
@@ -920,6 +1056,57 @@ QString DatabaseManager::lastError() const
     return m_lastError;
 }
 
+bool DatabaseManager::ensureMinimumComponentCatalogData(QSqlDatabase &database)
+{
+    QSqlQuery productQuery(database);
+    productQuery.prepare(QStringLiteral("SELECT id, name FROM product_models ORDER BY id ASC;"));
+    if (!productQuery.exec()) {
+        m_lastError = productQuery.lastError().text();
+        return false;
+    }
+
+    QHash<QString, int> productIds;
+    while (productQuery.next()) {
+        productIds.insert(productQuery.value(1).toString(), productQuery.value(0).toInt());
+    }
+
+    QSqlQuery insertComponent(database);
+    insertComponent.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO product_model_components "
+        "(product_model_id, component_name, unit_price) VALUES (?, ?, ?);"));
+
+    const QList<QPair<QString, QList<OrderComponentData>>> catalogEntries = {
+        {QStringLiteral("OMS-标准灯箱"),
+         {{QStringLiteral("光源"), 0, 90.0, QString()},
+          {QStringLiteral("灯罩"), 0, 25.0, QString()},
+          {QStringLiteral("电源"), 0, 180.0, QString()},
+          {QStringLiteral("白色机头"), 0, 220.0, QString()}}},
+        {QStringLiteral("OMS-展示架"),
+         {{QStringLiteral("主架"), 0, 160.0, QString()},
+          {QStringLiteral("连接件"), 0, 18.0, QString()},
+          {QStringLiteral("底座"), 0, 45.0, QString()}}}
+    };
+
+    for (const auto &entry : catalogEntries) {
+        const int productModelId = productIds.value(entry.first);
+        if (productModelId <= 0) {
+            continue;
+        }
+
+        for (const OrderComponentData &component : entry.second) {
+            insertComponent.bindValue(0, productModelId);
+            insertComponent.bindValue(1, component.componentName);
+            insertComponent.bindValue(2, component.unitPrice);
+            if (!insertComponent.exec()) {
+                m_lastError = insertComponent.lastError().text();
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 bool DatabaseManager::openDatabase()
 {
     QSqlDatabase database;
@@ -972,6 +1159,15 @@ bool DatabaseManager::createTables()
             "quantity_per_set INTEGER NOT NULL,"
             "unit_price REAL NOT NULL DEFAULT 0,"
             "FOREIGN KEY(option_template_id) REFERENCES option_templates(id)"
+            ");"),
+        QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS product_model_components ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "product_model_id INTEGER NOT NULL,"
+            "component_name TEXT NOT NULL,"
+            "unit_price REAL NOT NULL DEFAULT 0,"
+            "UNIQUE(product_model_id, component_name),"
+            "FOREIGN KEY(product_model_id) REFERENCES product_models(id)"
             ");"),
         QStringLiteral(
             "CREATE TABLE IF NOT EXISTS order_items ("

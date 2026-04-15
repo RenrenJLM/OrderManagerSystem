@@ -18,6 +18,13 @@ struct TemplateOption
     QString name;
 };
 
+struct ProductComponentOption
+{
+    int id = 0;
+    QString name;
+    double unitPrice = 0.0;
+};
+
 struct OrderComponentData
 {
     QString componentName;
@@ -32,6 +39,7 @@ struct OrderSaveData
     QString customerName;
     QString productModelName;
     int quantitySets = 0;
+    double bodyUnitPrice = 0.0;
     double unitPrice = 0.0;
     QString configurationName;
 };
@@ -67,6 +75,14 @@ struct ShipmentComponentStatus
     bool isBodyComponent = false;
 };
 
+struct OrderShipmentRecord
+{
+    QString shipmentDate;
+    QString shipmentType;
+    int shipmentQuantity = 0;
+    QString note;
+};
+
 class DatabaseManager
 {
 public:
@@ -75,9 +91,15 @@ public:
     bool initialize();
     bool ensureMinimumDemoData();
     QList<ProductModelOption> productModels();
+    QList<ProductComponentOption> productModelComponents(int productModelId);
     QList<TemplateOption> optionTemplatesForProduct(int productModelId);
     QList<OrderComponentData> templateComponents(int templateId);
     bool saveOrder(const OrderSaveData &orderData, const QList<OrderComponentData> &components);
+    QList<ShipmentOrderSummary> queryOrders(const QString &customerKeyword,
+                                           const QString &productModelName,
+                                           bool onlyUnfinished);
+    QList<ShipmentComponentStatus> orderComponents(int orderItemId);
+    QList<OrderShipmentRecord> orderShipments(int orderItemId);
     QList<ShipmentOrderSummary> shipmentOrders();
     QList<ShipmentComponentStatus> shipmentComponents(int orderItemId);
     bool saveOrderShipment(int orderItemId,
@@ -96,6 +118,7 @@ private:
     bool enableForeignKeys();
     bool createTables();
     bool repairShipmentData();
+    bool ensureMinimumComponentCatalogData(QSqlDatabase &database);
     bool ensureColumnExists(const QString &tableName,
                             const QString &columnName,
                             const QString &columnDefinition);
