@@ -29,11 +29,20 @@ private:
     void addEmptyComponentRow();
     QList<OrderComponentData> collectComponentsFromTable() const;
     void updateComponentTotals();
+    void updatePriceDisplays();
     void clearOrderForm();
     bool validateOrderInput(QString *errorMessage) const;
+    void loadShipmentOrders();
+    void refreshShipmentDetails();
+    void setShipmentComponentRows(const QList<ShipmentComponentStatus> &components);
+    void updateSelectedShipmentComponent();
+    int currentShipmentOrderId() const;
+    int selectedShipmentComponentId() const;
 
     Ui::MainWindow *ui;
     DatabaseManager m_databaseManager;
+    QList<ShipmentOrderSummary> m_shipmentOrders;
+    QList<ShipmentComponentStatus> m_shipmentComponents;
     bool m_updatingComponentTable = false;
     bool m_isInitializing = false;
     bool m_isShuttingDown = false;

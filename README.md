@@ -2,7 +2,7 @@
 
 `OrderManagerSystem` 是一个轻量级订单管理系统，面向日常业务中的订单录入、配置管理、发货跟踪、订单查询与汇总输出等场景。
 
-开发阶段记录见：[development_log.md](development_log.md:1)
+开发阶段记录见：`development_log.md`  
 开发过程中使用 WSL 作为 Codex 辅助环境，实际 Qt 编译、运行与功能验证统一在 Windows `Qt 6.7.3 + MSVC 2019` 环境中完成。
 
 ---
