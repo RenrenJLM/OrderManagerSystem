@@ -11,6 +11,11 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
+class QEvent;
+class QTableWidget;
+class QTimer;
+class QWidget;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -19,8 +24,19 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void changeEvent(QEvent *event) override;
+
 private:
     void setupUiState();
+    void setupCustomTitleBar();
+    void setupTopMenus();
+    void applyUiTheme();
+    void configureTableWidget(QTableWidget *tableWidget) const;
+    void showStatusMessage(const QString &message, int timeoutMs = 0);
+    void toggleMaximizeRestore();
+    void updateWindowControlButtons();
     void loadProductModels();
     void loadCustomComponentOptions();
     void loadTemplatesForCurrentProduct();
@@ -56,6 +72,7 @@ private:
     QList<ShipmentOrderSummary> m_queryOrders;
     QList<ShipmentOrderSummary> m_shipmentOrders;
     QList<ShipmentComponentStatus> m_shipmentComponents;
+    QTimer *m_statusMessageClearTimer = nullptr;
     bool m_updatingComponentTable = false;
     bool m_isInitializing = false;
     bool m_isShuttingDown = false;

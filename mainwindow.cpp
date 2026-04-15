@@ -3,14 +3,21 @@
 
 #include <QAbstractItemView>
 #include <QAbstractSpinBox>
+#include <QAction>
 #include <QComboBox>
 #include <QDate>
 #include <QDebug>
+#include <QEvent>
 #include <QHeaderView>
+#include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTableWidgetItem>
+#include <QTimer>
+#include <QWindow>
 #include <QtGlobal>
 
 namespace {
@@ -74,6 +81,11 @@ MainWindow::MainWindow(QWidget *parent)
 {
     m_isInitializing = true;
     ui->setupUi(this);
+    setWindowFlag(Qt::FramelessWindowHint, true);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setMouseTracking(true);
+    m_statusMessageClearTimer = new QTimer(this);
+    m_statusMessageClearTimer->setSingleShot(true);
 
     if (!m_databaseManager.ensureMinimumDemoData()) {
         QMessageBox::critical(this,
@@ -162,7 +174,7 @@ MainWindow::MainWindow(QWidget *parent)
                     return;
                 }
 
-                statusBar()->showMessage(QStringLiteral("订单已保存"), 3000);
+                showStatusMessage(QStringLiteral("订单已保存"), 3000);
                 clearOrderForm();
                 loadShipmentOrders();
                 performOrderQuery();
@@ -222,7 +234,7 @@ MainWindow::MainWindow(QWidget *parent)
                 }
 
                 ui->shipmentOrderNoteLineEdit->clear();
-                statusBar()->showMessage(QStringLiteral("订单发货已保存"), 3000);
+                showStatusMessage(QStringLiteral("订单发货已保存"), 3000);
                 loadShipmentOrders();
             });
     connect(ui->saveComponentShipmentButton,
@@ -252,7 +264,7 @@ MainWindow::MainWindow(QWidget *parent)
 
                 const int previouslySelectedComponentId = componentId;
                 ui->componentShipmentNoteLineEdit->clear();
-                statusBar()->showMessage(QStringLiteral("组件发货已保存"), 3000);
+                showStatusMessage(QStringLiteral("组件发货已保存"), 3000);
                 loadShipmentOrders();
                 performOrderQuery();
 
@@ -313,12 +325,61 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUiState()
 {
+    setMinimumSize(1180, 860);
+    ui->menubar->hide();
+    ui->mainTabWidget->setDocumentMode(true);
+    ui->verticalLayout->setSpacing(0);
+    ui->verticalLayout->setContentsMargins(2, 2, 2, 2);
+    ui->windowSurfaceLayout->setSpacing(0);
+    ui->windowSurfaceLayout->setContentsMargins(0, 0, 0, 0);
+    ui->titleBarLayout->setSpacing(12);
+    ui->titleBarLayout->setContentsMargins(16, 3, 10, 3);
+    ui->titleIdentityLayout->setSpacing(2);
+    ui->titleIdentityLayout->setContentsMargins(0, 0, 0, 0);
+    ui->topMenuLayout->setSpacing(8);
+    ui->topMenuLayout->setContentsMargins(0, 0, 0, 0);
+    ui->windowControlsLayout->setSpacing(8);
+    ui->windowControlsLayout->setContentsMargins(0, 0, 0, 0);
+    ui->statusMessageLayout->setSpacing(0);
+    ui->statusMessageLayout->setContentsMargins(16, 0, 16, 12);
+    ui->titleBarLayout->setStretch(2, 1);
+    ui->titleDragWidget->setCursor(Qt::SizeAllCursor);
+    ui->orderEntryTabLayout->setSpacing(16);
+    ui->orderEntryTabLayout->setContentsMargins(16, 16, 16, 16);
+    ui->orderInputLayout->setSpacing(16);
+    ui->formGridLayout->setHorizontalSpacing(16);
+    ui->formGridLayout->setVerticalSpacing(12);
+    ui->formGridLayout->setColumnStretch(1, 1);
+    ui->formGridLayout->setColumnStretch(3, 1);
+    ui->configurationModeLayout->setSpacing(12);
+    ui->componentsLayout->setSpacing(16);
+    ui->componentButtonLayout->setSpacing(8);
+    ui->shipmentTabLayout->setSpacing(16);
+    ui->shipmentTabLayout->setContentsMargins(16, 16, 16, 16);
+    ui->shipmentLayout->setSpacing(16);
+    ui->shipmentFormLayout->setHorizontalSpacing(16);
+    ui->shipmentFormLayout->setVerticalSpacing(12);
+    ui->shipmentFormLayout->setColumnStretch(1, 1);
+    ui->shipmentFormLayout->setColumnStretch(3, 1);
+    ui->shipmentOrderButtonLayout->setSpacing(8);
+    ui->componentShipmentFormLayout->setHorizontalSpacing(16);
+    ui->componentShipmentFormLayout->setVerticalSpacing(12);
+    ui->componentShipmentFormLayout->setColumnStretch(1, 1);
+    ui->componentShipmentFormLayout->setColumnStretch(3, 1);
+    ui->queryTabLayout->setSpacing(16);
+    ui->queryTabLayout->setContentsMargins(16, 16, 16, 16);
+    ui->queryLayout->setSpacing(16);
+    ui->queryFilterLayout->setHorizontalSpacing(8);
+    ui->queryFilterLayout->setVerticalSpacing(8);
+
     ui->orderDateEdit->setDate(QDate::currentDate());
     ui->quantitySetsSpinBox->setMinimum(1);
+    ui->quantitySetsSpinBox->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
     ui->bodyUnitPriceDoubleSpinBox->setMinimum(0.0);
     ui->bodyUnitPriceDoubleSpinBox->setDecimals(2);
     ui->bodyUnitPriceDoubleSpinBox->setMaximum(9999999.99);
     ui->bodyUnitPriceDoubleSpinBox->setReadOnly(false);
+    ui->bodyUnitPriceDoubleSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->unitPriceDoubleSpinBox->setMinimum(0.0);
     ui->unitPriceDoubleSpinBox->setDecimals(2);
     ui->unitPriceDoubleSpinBox->setMaximum(9999999.99);
@@ -326,8 +387,33 @@ void MainWindow::setupUiState()
     ui->unitPriceDoubleSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->shipmentDateEdit->setDate(QDate::currentDate());
     ui->shipmentSetsSpinBox->setMinimum(0);
+    ui->shipmentSetsSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->componentShipmentQuantitySpinBox->setMinimum(0);
+    ui->componentShipmentQuantitySpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->queryOrderCountValueLabel->setText(QStringLiteral("0"));
+    ui->shipmentOrderStatusValueLabel->setWordWrap(true);
+    ui->selectedComponentValueLabel->setWordWrap(true);
+    ui->windowTitleLabel->setProperty("titleRole", "title");
+    ui->statusMessageLabel->setProperty("labelRole", "statusMessage");
+    ui->minimizeWindowButton->setText(QStringLiteral("−"));
+
+    ui->saveOrderButton->setProperty("buttonRole", "primary");
+    ui->saveOrderShipmentButton->setProperty("buttonRole", "primary");
+    ui->saveComponentShipmentButton->setProperty("buttonRole", "primary");
+    ui->addComponentButton->setProperty("buttonRole", "secondary");
+    ui->removeComponentButton->setProperty("buttonRole", "secondary");
+    ui->querySearchButton->setProperty("buttonRole", "secondary");
+    ui->queryResetButton->setProperty("buttonRole", "secondary");
+    ui->fileMenuButton->setProperty("buttonRole", "menu");
+    ui->viewMenuButton->setProperty("buttonRole", "menu");
+    ui->toolsMenuButton->setProperty("buttonRole", "menu");
+    ui->helpMenuButton->setProperty("buttonRole", "menu");
+    ui->minimizeWindowButton->setProperty("buttonRole", "window");
+    ui->maximizeWindowButton->setProperty("buttonRole", "window");
+    ui->closeWindowButton->setProperty("buttonRole", "dangerWindow");
+    ui->shipmentOrderStatusValueLabel->setProperty("valueRole", "status");
+    ui->selectedComponentValueLabel->setProperty("valueRole", "status");
+    ui->queryOrderCountValueLabel->setProperty("valueRole", "metric");
 
     ui->componentTableWidget->setColumnCount(6);
     ui->componentTableWidget->setHorizontalHeaderLabels(
@@ -350,6 +436,7 @@ void MainWindow::setupUiState()
                                                                        QHeaderView::ResizeToContents);
     ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(
         kComponentTotalPriceColumn, QHeaderView::ResizeToContents);
+    configureTableWidget(ui->componentTableWidget);
 
     ui->shipmentComponentTableWidget->setColumnCount(8);
     ui->shipmentComponentTableWidget->setHorizontalHeaderLabels(
@@ -381,6 +468,7 @@ void MainWindow::setupUiState()
         kShipmentComponentTotalPriceColumn, QHeaderView::ResizeToContents);
     ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
         kShipmentComponentSourceColumn, QHeaderView::ResizeToContents);
+    configureTableWidget(ui->shipmentComponentTableWidget);
 
     ui->orderListTableWidget->setColumnCount(10);
     ui->orderListTableWidget->setHorizontalHeaderLabels(
@@ -418,6 +506,7 @@ void MainWindow::setupUiState()
         kQueryOrderTotalPriceColumn, QHeaderView::ResizeToContents);
     ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryOrderStatusColumn, QHeaderView::ResizeToContents);
+    configureTableWidget(ui->orderListTableWidget);
 
     ui->orderDetailComponentTableWidget->setColumnCount(5);
     ui->orderDetailComponentTableWidget->setHorizontalHeaderLabels(
@@ -440,6 +529,7 @@ void MainWindow::setupUiState()
         kQueryDetailShippedColumn, QHeaderView::ResizeToContents);
     ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryDetailUnshippedColumn, QHeaderView::ResizeToContents);
+    configureTableWidget(ui->orderDetailComponentTableWidget);
 
     ui->orderShipmentHistoryTableWidget->setColumnCount(4);
     ui->orderShipmentHistoryTableWidget->setHorizontalHeaderLabels(
@@ -457,12 +547,28 @@ void MainWindow::setupUiState()
         kQueryShipmentTypeColumn, QHeaderView::ResizeToContents);
     ui->orderShipmentHistoryTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryShipmentQuantityColumn, QHeaderView::ResizeToContents);
+    configureTableWidget(ui->orderShipmentHistoryTableWidget);
+
+    ui->orderDetailSplitter->setChildrenCollapsible(false);
+    ui->orderDetailSplitter->setHandleWidth(1);
+    ui->orderDetailSplitter->setStretchFactor(0, 1);
+    ui->orderDetailSplitter->setStretchFactor(1, 1);
 
     ui->templateConfigurationRadioButton->setChecked(true);
     setCustomConfigurationMode(false);
     ui->saveOrderShipmentButton->setEnabled(false);
     ui->saveComponentShipmentButton->setEnabled(false);
     ui->componentShipmentQuantitySpinBox->setEnabled(false);
+    statusBar()->hide();
+    statusBar()->setSizeGripEnabled(false);
+    setupTopMenus();
+    setupCustomTitleBar();
+    applyUiTheme();
+    connect(m_statusMessageClearTimer, &QTimer::timeout, this, [this]() {
+        if (ui != nullptr && ui->statusMessageLabel != nullptr) {
+            ui->statusMessageLabel->clear();
+        }
+    });
     connect(ui->bodyUnitPriceDoubleSpinBox,
             qOverload<double>(&QDoubleSpinBox::valueChanged),
             this,
@@ -471,6 +577,440 @@ void MainWindow::setupUiState()
                     updatePriceDisplays();
                 }
             });
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == ui->titleDragWidget || watched == ui->windowTitleLabel
+        || watched == ui->titleIdentityWidget) {
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                toggleMaximizeRestore();
+                return true;
+            }
+        }
+
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton && windowHandle() != nullptr
+                && windowHandle()->startSystemMove()) {
+                return true;
+            }
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) {
+        updateWindowControlButtons();
+    }
+}
+
+void MainWindow::setupCustomTitleBar()
+{
+    ui->titleDragWidget->installEventFilter(this);
+    ui->titleIdentityWidget->installEventFilter(this);
+    ui->windowTitleLabel->installEventFilter(this);
+
+    connect(ui->minimizeWindowButton, &QPushButton::clicked, this, &QWidget::showMinimized);
+    connect(ui->maximizeWindowButton, &QPushButton::clicked, this, &MainWindow::toggleMaximizeRestore);
+    connect(ui->closeWindowButton, &QPushButton::clicked, this, &QWidget::close);
+
+    updateWindowControlButtons();
+}
+
+void MainWindow::setupTopMenus()
+{
+    auto *fileMenu = new QMenu(this);
+    fileMenu->addAction(QStringLiteral("刷新界面"), this, [this]() {
+        loadProductModels();
+        loadQueryProductModels();
+        loadShipmentOrders();
+        performOrderQuery();
+        showStatusMessage(QStringLiteral("界面数据已刷新"), 3000);
+    });
+    fileMenu->addSeparator();
+    fileMenu->addAction(QStringLiteral("退出"), this, &QWidget::close);
+    ui->fileMenuButton->setMenu(fileMenu);
+
+    auto *viewMenu = new QMenu(this);
+    viewMenu->addAction(QStringLiteral("订单录入"), this, [this]() { ui->mainTabWidget->setCurrentIndex(0); });
+    viewMenu->addAction(QStringLiteral("发货登记"), this, [this]() { ui->mainTabWidget->setCurrentIndex(1); });
+    viewMenu->addAction(QStringLiteral("订单查询"), this, [this]() { ui->mainTabWidget->setCurrentIndex(2); });
+    ui->viewMenuButton->setMenu(viewMenu);
+
+    auto *toolsMenu = new QMenu(this);
+    toolsMenu->addAction(QStringLiteral("重新加载基础数据"), this, [this]() {
+        loadProductModels();
+        loadQueryProductModels();
+        loadShipmentOrders();
+        performOrderQuery();
+        showStatusMessage(QStringLiteral("基础数据已重新加载"), 3000);
+    });
+    toolsMenu->addAction(QStringLiteral("界面样式说明"), this, [this]() {
+        QMessageBox::information(this,
+                                 QStringLiteral("界面样式说明"),
+                                 QStringLiteral("当前界面采用浅色桌面业务风格，顶栏、表单、表格和页签已按统一规范整理。"));
+    });
+    ui->toolsMenuButton->setMenu(toolsMenu);
+
+    auto *helpMenu = new QMenu(this);
+    helpMenu->addAction(QStringLiteral("使用说明"), this, [this]() {
+        QMessageBox::information(this,
+                                 QStringLiteral("使用说明"),
+                                 QStringLiteral("通过页签完成订单录入、发货登记和订单查询。顶栏菜单用于常用入口和预留扩展。"));
+    });
+    helpMenu->addAction(QStringLiteral("关于"), this, [this]() {
+        QMessageBox::information(this,
+                                 QStringLiteral("关于"),
+                                 QStringLiteral("OrderManagerSystem\nQt Widgets 桌面订单管理系统"));
+    });
+    ui->helpMenuButton->setMenu(helpMenu);
+}
+
+void MainWindow::toggleMaximizeRestore()
+{
+    if (isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+
+    updateWindowControlButtons();
+}
+
+void MainWindow::updateWindowControlButtons()
+{
+    const bool maximized = isMaximized() || isFullScreen();
+    ui->maximizeWindowButton->setText(isMaximized() ? QStringLiteral("❐")
+                                                    : QStringLiteral("□"));
+    ui->verticalLayout->setContentsMargins(maximized ? 0 : 2,
+                                           maximized ? 0 : 2,
+                                           maximized ? 0 : 2,
+                                           maximized ? 0 : 2);
+    ui->windowSurfaceFrame->setProperty("windowState", maximized ? "maximized" : "normal");
+    ui->titleBarFrame->setProperty("windowState", maximized ? "maximized" : "normal");
+    ui->windowSurfaceFrame->style()->unpolish(ui->windowSurfaceFrame);
+    ui->windowSurfaceFrame->style()->polish(ui->windowSurfaceFrame);
+    ui->titleBarFrame->style()->unpolish(ui->titleBarFrame);
+    ui->titleBarFrame->style()->polish(ui->titleBarFrame);
+    ui->windowSurfaceFrame->update();
+    ui->titleBarFrame->update();
+}
+
+void MainWindow::applyUiTheme()
+{
+    setStyleSheet(QStringLiteral(
+        "QMainWindow {"
+        "  background: transparent;"
+        "}"
+        "QWidget#centralwidget {"
+        "  background: transparent;"
+        "  color: #202534;"
+        "  font-size: 13px;"
+        "}"
+        "QFrame#windowSurfaceFrame {"
+        "  background: #dfe5ee;"
+        "  border: 1px solid #cfd7e3;"
+        "  border-radius: 6px;"
+        "}"
+        "QFrame#windowSurfaceFrame[windowState=\"maximized\"] {"
+        "  border-radius: 0px;"
+        "}"
+        "QFrame#titleBarFrame {"
+        "  background: #f7f9fc;"
+        "  border: none;"
+        "  border-bottom: 1px solid #d7deea;"
+        "  border-top-left-radius: 6px;"
+        "  border-top-right-radius: 6px;"
+        "}"
+        "QFrame#titleBarFrame[windowState=\"maximized\"] {"
+        "  border-top-left-radius: 0px;"
+        "  border-top-right-radius: 0px;"
+        "}"
+        "QFrame#statusMessageFrame {"
+        "  background: transparent;"
+        "  border: none;"
+        "}"
+        "QLabel {"
+        "  color: #4a5364;"
+        "}"
+        "QLabel[titleRole=\"title\"] {"
+        "  color: #1f2937;"
+        "  font-size: 13px;"
+        "  font-weight: 500;"
+        "}"
+        "QLabel[labelRole=\"statusMessage\"] {"
+        "  color: #667085;"
+        "  background: transparent;"
+        "  padding: 0;"
+        "  min-height: 18px;"
+        "}"
+        "QLabel[valueRole=\"status\"] {"
+        "  color: #243247;"
+        "  background: #f8fafc;"
+        "  border: 1px solid #d7dee8;"
+        "  border-radius: 6px;"
+        "  padding: 8px 10px;"
+        "}"
+        "QLabel[valueRole=\"metric\"] {"
+        "  color: #1f2937;"
+        "  font-size: 15px;"
+        "  font-weight: 600;"
+        "}"
+        "QToolButton[buttonRole=\"menu\"] {"
+        "  min-height: 34px;"
+        "  padding: 0 12px;"
+        "  color: #314155;"
+        "  background: transparent;"
+        "  border: 1px solid transparent;"
+        "  border-radius: 4px;"
+        "}"
+        "QToolButton[buttonRole=\"menu\"]:hover {"
+        "  background: #eef3f8;"
+        "  border-color: #d7deea;"
+        "}"
+        "QToolButton[buttonRole=\"menu\"]::menu-indicator {"
+        "  image: none;"
+        "}"
+        "QMenu {"
+        "  background: #ffffff;"
+        "  border: 1px solid #d7deea;"
+        "  padding: 6px;"
+        "}"
+        "QMenu::item {"
+        "  padding: 8px 18px;"
+        "  border-radius: 6px;"
+        "}"
+        "QMenu::item:selected {"
+        "  background: #edf3ff;"
+        "  color: #1d4ed8;"
+        "}"
+        "QTabWidget::pane {"
+        "  border: 1px solid #d7deea;"
+        "  background: transparent;"
+        "  border-radius: 6px;"
+        "  margin-top: 10px;"
+        "}"
+        "QTabBar::tab {"
+        "  background: #eef2f7;"
+        "  color: #5a6374;"
+        "  border: 1px solid #d7deea;"
+        "  padding: 9px 18px;"
+        "  min-height: 18px;"
+        "  margin-right: 8px;"
+        "  border-top-left-radius: 4px;"
+        "  border-top-right-radius: 4px;"
+        "}"
+        "QTabBar::tab:selected {"
+        "  color: #1f2937;"
+        "  background: #ffffff;"
+        "  border-color: #cfd8e6;"
+        "}"
+        "QTabBar::tab:hover:!selected {"
+        "  background: #f4f7fb;"
+        "  color: #344256;"
+        "}"
+        "QGroupBox {"
+        "  background: #ffffff;"
+        "  border: 1px solid #d7deea;"
+        "  border-radius: 6px;"
+        "  margin-top: 16px;"
+        "  padding: 16px;"
+        "  padding-top: 20px;"
+        "}"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin;"
+        "  left: 14px;"
+        "  padding: 0 6px;"
+        "  color: #526072;"
+        "  background: transparent;"
+        "  font-size: 14px;"
+        "  font-weight: 500;"
+        "}"
+        "QLineEdit, QComboBox, QAbstractSpinBox, QDateEdit {"
+        "  min-height: 36px;"
+        "  background: #fcfdff;"
+        "  color: #1f2937;"
+        "  border: 1px solid #d8e0ea;"
+        "  border-radius: 4px;"
+        "  padding: 0 10px;"
+        "  selection-background-color: #dbeafe;"
+        "}"
+        "QComboBox::drop-down {"
+        "  width: 28px;"
+        "  border: none;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        "  background: #ffffff;"
+        "  color: #1f2937;"
+        "  border: 1px solid #d8e0ea;"
+        "  selection-background-color: #e8f0ff;"
+        "}"
+        "QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QDateEdit:focus {"
+        "  border: 1px solid #4f7cff;"
+        "  background: #ffffff;"
+        "}"
+        "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {"
+        "  width: 18px;"
+        "  border: none;"
+        "  background: #f1f5f9;"
+        "  border-left: 1px solid #d8e0ea;"
+        "}"
+        "QAbstractSpinBox::up-button {"
+        "  border-top-right-radius: 4px;"
+        "  border-bottom: 1px solid #d8e0ea;"
+        "}"
+        "QAbstractSpinBox::down-button {"
+        "  border-bottom-right-radius: 4px;"
+        "}"
+        "QAbstractSpinBox::up-arrow, QAbstractSpinBox::down-arrow {"
+        "  width: 8px;"
+        "  height: 8px;"
+        "}"
+        "QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {"
+        "  background: #e7edf4;"
+        "}"
+        "QAbstractSpinBox[readOnly=\"true\"] {"
+        "  color: #5c6472;"
+        "  background: #f3f6fa;"
+        "}"
+        "QPushButton {"
+        "  min-height: 36px;"
+        "  padding: 0 14px;"
+        "  border-radius: 4px;"
+        "  border: 1px solid #d5dde8;"
+        "  background: #f7f9fc;"
+        "  color: #2c394b;"
+        "}"
+        "QPushButton:hover {"
+        "  background: #eef3f8;"
+        "}"
+        "QPushButton:pressed {"
+        "  background: #e4eaf2;"
+        "}"
+        "QPushButton[buttonRole=\"primary\"] {"
+        "  background: #3b82f6;"
+        "  color: #ffffff;"
+        "  border: 1px solid #3b82f6;"
+        "}"
+        "QPushButton[buttonRole=\"primary\"]:hover {"
+        "  background: #2563eb;"
+        "  border-color: #2563eb;"
+        "}"
+        "QPushButton[buttonRole=\"window\"] {"
+        "  min-width: 24px;"
+        "  min-height: 24px;"
+        "  padding: 0;"
+        "  font-size: 12px;"
+        "  background: transparent;"
+        "  border: 1px solid transparent;"
+        "}"
+        "QPushButton[buttonRole=\"window\"]:hover {"
+        "  background: #eef3f8;"
+        "  border-color: #d7deea;"
+        "}"
+        "QPushButton[buttonRole=\"dangerWindow\"] {"
+        "  min-width: 24px;"
+        "  min-height: 24px;"
+        "  padding: 0;"
+        "  font-size: 13px;"
+        "  background: transparent;"
+        "  border: 1px solid transparent;"
+        "}"
+        "QPushButton[buttonRole=\"dangerWindow\"]:hover {"
+        "  color: #ffffff;"
+        "  background: #ef4444;"
+        "  border-color: #ef4444;"
+        "}"
+        "QPushButton:disabled {"
+        "  color: #98a2b3;"
+        "  background: #f4f6f8;"
+        "  border-color: #e1e7ef;"
+        "}"
+        "QRadioButton, QCheckBox {"
+        "  spacing: 8px;"
+        "  color: #425064;"
+        "}"
+        "QRadioButton::indicator, QCheckBox::indicator {"
+        "  width: 16px;"
+        "  height: 16px;"
+        "}"
+        "QHeaderView::section {"
+        "  background: #f6f8fb;"
+        "  color: #4a5568;"
+        "  border: none;"
+        "  border-bottom: 1px solid #d7deea;"
+        "  padding: 8px 10px;"
+        "}"
+        "QTableWidget {"
+        "  background: #ffffff;"
+        "  alternate-background-color: #f8fafc;"
+        "  border: 1px solid #d7deea;"
+        "  border-radius: 4px;"
+        "  gridline-color: #eef2f7;"
+        "  color: #1f2937;"
+        "  selection-background-color: #dbeafe;"
+        "  selection-color: #1e3a8a;"
+        "}"
+        "QTableWidget::item {"
+        "  padding: 6px 10px;"
+        "  border-bottom: 1px solid #eef2f7;"
+        "}"
+        "QTableWidget::item:hover {"
+        "  background: #f3f7fd;"
+        "}"
+        "QTableWidget::item:selected {"
+        "  background: #dbeafe;"
+        "}"
+        "QSplitter::handle {"
+        "  background: #dfe6ef;"
+        "}"
+        "QStatusBar {"
+        "  background: transparent;"
+        "  color: transparent;"
+        "  border: none;"
+        "}"
+    ));
+}
+
+void MainWindow::showStatusMessage(const QString &message, int timeoutMs)
+{
+    if (ui == nullptr || ui->statusMessageLabel == nullptr || m_statusMessageClearTimer == nullptr) {
+        return;
+    }
+
+    m_statusMessageClearTimer->stop();
+    ui->statusMessageLabel->setText(message);
+
+    if (timeoutMs > 0) {
+        m_statusMessageClearTimer->start(timeoutMs);
+    }
+}
+
+void MainWindow::configureTableWidget(QTableWidget *tableWidget) const
+{
+    if (tableWidget == nullptr) {
+        return;
+    }
+
+    tableWidget->setAlternatingRowColors(true);
+    tableWidget->setShowGrid(false);
+    tableWidget->setWordWrap(false);
+    tableWidget->setMouseTracking(true);
+    tableWidget->setFocusPolicy(Qt::StrongFocus);
+    tableWidget->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tableWidget->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tableWidget->verticalHeader()->setVisible(false);
+    tableWidget->verticalHeader()->setDefaultSectionSize(34);
+    tableWidget->horizontalHeader()->setMinimumSectionSize(48);
+    tableWidget->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    tableWidget->horizontalHeader()->setFixedHeight(36);
 }
 
 void MainWindow::loadProductModels()
@@ -488,7 +1028,7 @@ void MainWindow::loadProductModels()
     }
 
     if (ui->productModelComboBox->count() == 0) {
-        statusBar()->showMessage(QStringLiteral("没有可用的产品型号数据"), 5000);
+        showStatusMessage(QStringLiteral("没有可用的产品型号数据"), 5000);
     }
 
     m_updatingComponentTable = false;
@@ -540,7 +1080,7 @@ void MainWindow::loadTemplatesForCurrentProduct()
         if (!m_customComponentOptions.isEmpty()) {
             addEmptyComponentRow();
         } else {
-            statusBar()->showMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
+            showStatusMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
         }
         updatePriceDisplays();
         return;
@@ -559,7 +1099,7 @@ void MainWindow::loadSelectedTemplateComponents()
     if (templateId <= 0) {
         setComponentTableRows({}, false);
         if (ui->templateConfigurationRadioButton->isChecked()) {
-            statusBar()->showMessage(QStringLiteral("当前产品没有可用模板"), 5000);
+            showStatusMessage(QStringLiteral("当前产品没有可用模板"), 5000);
         }
         return;
     }
@@ -582,7 +1122,7 @@ void MainWindow::setCustomConfigurationMode(bool enabled)
         if (!m_customComponentOptions.isEmpty()) {
             addEmptyComponentRow();
         } else {
-            statusBar()->showMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
+            showStatusMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
         }
     } else {
         loadSelectedTemplateComponents();
