@@ -204,6 +204,7 @@ struct StructuredOrderSummary
     int id = 0;
     QString orderDate;
     QString customerName;
+    int productCategoryId = 0;
     QString productCategoryName;
     QString productSkuName;
     QString baseConfigurationName;
@@ -214,7 +215,17 @@ struct StructuredOrderSummary
     QString status;
     int availableSetShipments = 0;
     bool isCompleted = false;
+    bool hasShipmentRecord = false;
     bool shipmentReady = false;
+};
+
+struct StructuredOrderQueryFilter
+{
+    QString startDate;
+    QString endDate;
+    QString customerKeyword;
+    int productSkuId = 0;
+    bool onlyOpen = false;
 };
 
 struct StructuredOrderComponentSnapshot
@@ -237,13 +248,27 @@ struct StructuredOrderComponentSnapshot
     QString adjustmentType;
 };
 
+struct InventoryDemandSummaryRow
+{
+    int productCategoryId = 0;
+    QString productCategoryName;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    int totalDemandQuantity = 0;
+    int currentInventoryQuantity = 0;
+    int shortageQuantity = 0;
+};
+
 class DatabaseManager
 {
 public:
     DatabaseManager();
 
     bool initialize();
-    bool ensureMinimumDemoData();
+    bool ensureRequiredReferenceData();
     QList<ProductModelOption> productModels();
     QList<ProductComponentOption> productModelComponents(int productModelId);
     QList<TemplateOption> optionTemplatesForProduct(int productModelId);
@@ -277,6 +302,7 @@ public:
     bool saveStructuredOrder(const StructuredOrderSaveData &orderData,
                              const QList<StructuredOrderComponentData> &components);
     QList<StructuredOrderSummary> structuredOrders(bool onlyOpen = false);
+    QList<StructuredOrderSummary> structuredOrders(const StructuredOrderQueryFilter &filter);
     QList<StructuredOrderComponentSnapshot> structuredOrderComponents(int orderId);
     QList<OrderShipmentRecord> structuredOrderShipments(int orderId);
     bool saveStructuredOrderShipment(int orderId,
@@ -289,6 +315,7 @@ public:
                                          int shipmentQuantity,
                                          const QString &note);
     QList<OrderMaterialDemandData> unshippedOrderMaterialDemands();
+    QList<InventoryDemandSummaryRow> inventoryDemandSummary();
     QList<InventoryItemData> inventoryItems();
     QList<ProductComponentOption> inventoryComponentOptions(int productCategoryId = 0);
     bool saveInventoryItem(const InventoryItemData &item);
@@ -308,7 +335,7 @@ private:
     bool repairShipmentData();
     bool repairStructuredInventoryUnitPrices(QSqlDatabase &database);
     bool ensureMinimumComponentCatalogData(QSqlDatabase &database);
-    bool ensureMinimumStructuredDemoData(QSqlDatabase &database);
+    bool ensureStructuredReferenceData(QSqlDatabase &database);
     bool ensureColumnExists(const QString &tableName,
                             const QString &columnName,
                             const QString &columnDefinition);

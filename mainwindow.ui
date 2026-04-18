@@ -166,7 +166,7 @@
              <item row="1" column="0">
               <widget class="QLabel" name="productModelLabel">
                <property name="text">
-                <string>产品型号</string>
+                <string>具体型号</string>
                </property>
               </widget>
              </item>
@@ -347,7 +347,7 @@
         <item>
          <widget class="QGroupBox" name="shipmentGroupBox">
           <property name="title">
-           <string>发货登记</string>
+           <string>发货管理</string>
           </property>
           <layout class="QVBoxLayout" name="shipmentLayout">
            <item>
@@ -386,7 +386,7 @@
              <item row="1" column="3">
               <widget class="QLabel" name="shipmentOrderStatusValueLabel">
                <property name="text">
-                <string>请先选择订单</string>
+                <string>暂无订单数据</string>
                </property>
               </widget>
              </item>
@@ -455,7 +455,7 @@
              <item row="0" column="1">
               <widget class="QLabel" name="selectedComponentValueLabel">
                <property name="text">
-                <string>未选择</string>
+                <string>未选择组件</string>
                </property>
               </widget>
              </item>
@@ -523,7 +523,7 @@
              <item row="0" column="2">
               <widget class="QLabel" name="queryProductModelLabel">
                <property name="text">
-                <string>产品型号</string>
+                <string>具体型号</string>
                </property>
               </widget>
              </item>
@@ -533,7 +533,7 @@
              <item row="0" column="4">
               <widget class="QCheckBox" name="queryOnlyUnfinishedCheckBox">
                <property name="text">
-                <string>仅未完成</string>
+                <string>仅显示未完成订单</string>
                </property>
               </widget>
              </item>
@@ -567,7 +567,7 @@
              <item row="0" column="8">
               <widget class="QLabel" name="queryOrderCountLabel">
                <property name="text">
-                <string>订单数</string>
+                <string>订单数量</string>
                </property>
               </widget>
              </item>

@@ -7,10 +7,11 @@
 #include <QComboBox>
 #include <QCompleter>
 #include <QDate>
-#include <QDebug>
+#include <QDialog>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFileDialog>
+#include <QFile>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHash>
@@ -23,6 +24,9 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QPrintDialog>
+#include <QPrinter>
+#include <QStringConverter>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -30,6 +34,8 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTableWidgetItem>
+#include <QTextDocument>
+#include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -194,7 +200,9 @@ constexpr int kDemandSummarySpecColumn = 2;
 constexpr int kDemandSummaryMaterialColumn = 3;
 constexpr int kDemandSummaryColorColumn = 4;
 constexpr int kDemandSummaryUnitColumn = 5;
-constexpr int kDemandSummaryQuantityColumn = 6;
+constexpr int kDemandSummaryDemandColumn = 6;
+constexpr int kDemandSummaryInventoryColumn = 7;
+constexpr int kDemandSummaryGapColumn = 8;
 
 constexpr int kReadyOrderIdColumn = 0;
 constexpr int kReadyOrderCustomerColumn = 1;
@@ -273,7 +281,7 @@ QString shipmentOrderDisplayText(const ShipmentOrderSummary &order)
         .arg(order.productModelName)
         .arg(order.configurationName)
         .arg(order.isCompleted
-                 ? QStringLiteral("订单已完成")
+                 ? QStringLiteral("已发")
                  : QStringLiteral("机体未发 %1 套 | 可整套发 %2 套")
                        .arg(order.unshippedSets)
                        .arg(order.availableSetShipments));
@@ -288,8 +296,24 @@ QString structuredShipmentOrderDisplayText(const StructuredOrderSummary &order)
         .arg(order.productSkuName)
         .arg(order.baseConfigurationName)
         .arg(order.isCompleted
-                 ? QStringLiteral("订单已完成")
+                 ? QStringLiteral("已发")
                  : QStringLiteral("可整套发 %1 套").arg(order.availableSetShipments));
+}
+
+QString structuredOrderShipmentStatusText(const StructuredOrderSummary &order)
+{
+    if (order.isCompleted || order.status == QStringLiteral("completed")) {
+        return QStringLiteral("已发");
+    }
+    if (order.hasShipmentRecord) {
+        return QStringLiteral("部分发货");
+    }
+    return QStringLiteral("未发");
+}
+
+QString structuredOrderReadinessText(const StructuredOrderSummary &order)
+{
+    return order.shipmentReady ? QStringLiteral("可发货") : QStringLiteral("不可发货");
 }
 }
 
@@ -305,7 +329,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_statusMessageClearTimer = new QTimer(this);
     m_statusMessageClearTimer->setSingleShot(true);
 
-    if (!m_databaseManager.ensureMinimumDemoData()) {
+    if (!m_databaseManager.ensureRequiredReferenceData()) {
         QMessageBox::critical(this,
                               QStringLiteral("基础数据初始化失败"),
                               m_databaseManager.lastError());
@@ -426,6 +450,21 @@ MainWindow::MainWindow(QWidget *parent)
                 performStructuredOrderQuery();
             });
     connect(ui->querySearchButton, &QPushButton::clicked, this, &MainWindow::performStructuredOrderQuery);
+    if (m_exportOrderSummaryButton != nullptr) {
+        connect(m_exportOrderSummaryButton,
+                &QPushButton::clicked,
+                this,
+                &MainWindow::exportOrderSummaryCsv);
+    }
+    if (m_exportShipmentListButton != nullptr) {
+        connect(m_exportShipmentListButton,
+                &QPushButton::clicked,
+                this,
+                &MainWindow::exportCurrentOrderShipmentCsv);
+    }
+    if (m_printCurrentOrderButton != nullptr) {
+        connect(m_printCurrentOrderButton, &QPushButton::clicked, this, &MainWindow::printCurrentOrder);
+    }
     connect(ui->queryResetButton,
             &QPushButton::clicked,
             this,
@@ -433,6 +472,12 @@ MainWindow::MainWindow(QWidget *parent)
                 ui->queryCustomerLineEdit->clear();
                 ui->queryProductModelComboBox->setCurrentIndex(0);
                 ui->queryOnlyUnfinishedCheckBox->setChecked(false);
+                if (m_queryStartDateEdit != nullptr) {
+                    m_queryStartDateEdit->setDate(QDate::currentDate().addMonths(-1));
+                }
+                if (m_queryEndDateEdit != nullptr) {
+                    m_queryEndDateEdit->setDate(QDate::currentDate());
+                }
                 performStructuredOrderQuery();
             });
     connect(ui->mainTabWidget,
@@ -536,13 +581,11 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
     m_isInitializing = false;
-    qDebug() << "MainWindow initialized";
 }
 
 MainWindow::~MainWindow()
 {
     m_isShuttingDown = true;
-    qDebug() << "MainWindow shutting down";
     if (ui != nullptr) {
         if (ui->mainTabWidget != nullptr) {
             disconnect(ui->mainTabWidget, nullptr, this, nullptr);
@@ -674,13 +717,14 @@ void MainWindow::setupUiState()
     ui->productModelLabel->setText(QStringLiteral("具体型号"));
     ui->templateLabel->setText(QStringLiteral("基础配置"));
     ui->unitPriceLabel->setText(QStringLiteral("配置价格"));
-    ui->orderInputGroupBox->setTitle(QStringLiteral("新订单录入"));
-    ui->componentsGroupBox->setTitle(QStringLiteral("订单组件快照"));
+    ui->orderInputGroupBox->setTitle(QStringLiteral("订单录入"));
+    ui->componentsGroupBox->setTitle(QStringLiteral("订单组件"));
     ui->queryProductModelLabel->setText(QStringLiteral("具体型号"));
-    ui->orderComponentDetailGroupBox->setTitle(QStringLiteral("最终订单组件"));
+    ui->orderComponentDetailGroupBox->setTitle(QStringLiteral("订单组件明细"));
     ui->configurationModeLabel->hide();
     ui->templateConfigurationRadioButton->hide();
     ui->customConfigurationRadioButton->hide();
+    setupQueryOutputControls();
 
     ui->componentTableWidget->setColumnCount(10);
     ui->componentTableWidget->setHorizontalHeaderLabels(
@@ -692,7 +736,7 @@ void MainWindow::setupUiState()
          QStringLiteral("每套数量"),
          QStringLiteral("单价"),
          QStringLiteral("来源"),
-         QStringLiteral("总需求数量"),
+         QStringLiteral("需求数量"),
          QStringLiteral("总价")});
     ui->componentTableWidget->horizontalHeader()->setStretchLastSection(false);
     ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentNameColumn,
@@ -724,7 +768,7 @@ void MainWindow::setupUiState()
         {QStringLiteral("组件名称"),
          QStringLiteral("每套数量"),
          QStringLiteral("单价"),
-         QStringLiteral("总需求"),
+         QStringLiteral("需求数量"),
          QStringLiteral("已发数量"),
          QStringLiteral("未发数量"),
          QStringLiteral("总价"),
@@ -792,7 +836,7 @@ void MainWindow::setupUiState()
          QStringLiteral("材质"),
          QStringLiteral("颜色"),
          QStringLiteral("每套数量"),
-         QStringLiteral("总需求"),
+         QStringLiteral("需求数量"),
          QStringLiteral("单价"),
          QStringLiteral("来源")});
     ui->orderDetailComponentTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -985,7 +1029,7 @@ void MainWindow::setupTopMenus()
     helpMenu->addAction(QStringLiteral("使用说明"), this, [this]() {
         QMessageBox::information(this,
                                  QStringLiteral("使用说明"),
-                                 QStringLiteral("通过页签完成产品资料维护、新订单录入、库存管理、发货登记和订单查询。"));
+                                 QStringLiteral("通过页签完成产品资料维护、订单录入、库存管理、发货登记和订单查询。"));
     });
     helpMenu->addAction(QStringLiteral("关于"), this, [this]() {
         QMessageBox::information(this,
@@ -1649,7 +1693,7 @@ void MainWindow::setupInventoryTab()
     m_inventoryUnitPriceSpinBox->setMaximum(9999999.99);
     m_inventoryUnitPriceSpinBox->setDecimals(2);
     inventoryFormLayout->addWidget(m_inventoryUnitPriceSpinBox, 3, 1);
-    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("当前库存"), inventoryGroup), 3, 2);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("库存数量"), inventoryGroup), 3, 2);
     m_inventoryQuantitySpinBox = new QSpinBox(inventoryGroup);
     m_inventoryQuantitySpinBox->setMinimum(0);
     m_inventoryQuantitySpinBox->setMaximum(999999999);
@@ -1661,7 +1705,7 @@ void MainWindow::setupInventoryTab()
 
     auto *inventoryButtonLayout = new QHBoxLayout();
     inventoryButtonLayout->addStretch();
-    m_importInventoryButton = new QPushButton(QStringLiteral("导入初始库存 CSV"), inventoryGroup);
+    m_importInventoryButton = new QPushButton(QStringLiteral("导入库存 CSV"), inventoryGroup);
     m_clearInventoryButton = new QPushButton(QStringLiteral("清空"), inventoryGroup);
     m_saveInventoryButton = new QPushButton(QStringLiteral("保存库存"), inventoryGroup);
     m_importInventoryButton->setProperty("buttonRole", "secondary");
@@ -1673,7 +1717,7 @@ void MainWindow::setupInventoryTab()
     inventoryLayout->addLayout(inventoryButtonLayout);
     inventoryEntryPageLayout->addWidget(inventoryGroup);
 
-    auto *inventoryListGroup = new QGroupBox(QStringLiteral("当前库存列表"), m_inventoryTab);
+    auto *inventoryListGroup = new QGroupBox(QStringLiteral("库存列表"), m_inventoryTab);
     auto *inventoryListLayout = new QVBoxLayout(inventoryListGroup);
     m_inventoryTableWidget = new QTableWidget(inventoryListGroup);
     m_inventoryTableWidget->setColumnCount(10);
@@ -1715,7 +1759,7 @@ void MainWindow::setupInventoryTab()
     inventoryListLayout->addWidget(m_inventoryTableWidget);
     inventoryListPageLayout->addWidget(inventoryListGroup);
 
-    auto *blockedOrderGroup = new QGroupBox(QStringLiteral("未满足发货条件的订单"), inventoryDemandPage);
+    auto *blockedOrderGroup = new QGroupBox(QStringLiteral("不可发货订单"), inventoryDemandPage);
     auto *blockedOrderLayout = new QVBoxLayout(blockedOrderGroup);
     m_inventoryBlockedOrderTableWidget = new QTableWidget(blockedOrderGroup);
     m_inventoryBlockedOrderTableWidget->setColumnCount(7);
@@ -1747,15 +1791,19 @@ void MainWindow::setupInventoryTab()
                                                                                  QHeaderView::ResizeToContents);
     blockedOrderLayout->addWidget(m_inventoryBlockedOrderTableWidget);
 
-    auto *demandGroup = new QGroupBox(QStringLiteral("缺少物料"), inventoryDemandPage);
+    auto *demandGroup = new QGroupBox(QStringLiteral("库存需求汇总"), inventoryDemandPage);
     auto *demandLayout = new QVBoxLayout(demandGroup);
     auto *demandScopeLayout = new QHBoxLayout();
     demandScopeLayout->addWidget(new QLabel(QStringLiteral("查看范围"), demandGroup));
     m_inventoryDemandScopeComboBox = new QComboBox(demandGroup);
     demandScopeLayout->addWidget(m_inventoryDemandScopeComboBox, 1);
+    setupInventoryOutputControls();
+    if (m_exportInventoryDemandButton != nullptr) {
+        demandScopeLayout->addWidget(m_exportInventoryDemandButton);
+    }
     demandLayout->addLayout(demandScopeLayout);
     m_demandSummaryTableWidget = new QTableWidget(demandGroup);
-    m_demandSummaryTableWidget->setColumnCount(7);
+    m_demandSummaryTableWidget->setColumnCount(9);
     m_demandSummaryTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("产品类型"),
          QStringLiteral("物料名称"),
@@ -1763,6 +1811,8 @@ void MainWindow::setupInventoryTab()
          QStringLiteral("材质"),
          QStringLiteral("颜色"),
          QStringLiteral("单位"),
+         QStringLiteral("需求数量"),
+         QStringLiteral("库存数量"),
          QStringLiteral("缺口数量")});
     configureTableWidget(m_demandSummaryTableWidget);
     m_demandSummaryTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1780,11 +1830,15 @@ void MainWindow::setupInventoryTab()
                                                                          QHeaderView::ResizeToContents);
     m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryUnitColumn,
                                                                          QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryQuantityColumn,
+    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryDemandColumn,
+                                                                         QHeaderView::ResizeToContents);
+    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryInventoryColumn,
+                                                                         QHeaderView::ResizeToContents);
+    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryGapColumn,
                                                                          QHeaderView::ResizeToContents);
     demandLayout->addWidget(m_demandSummaryTableWidget);
 
-    auto *readyOrderGroup = new QGroupBox(QStringLiteral("可发货订单提示"), inventoryListPage);
+    auto *readyOrderGroup = new QGroupBox(QStringLiteral("可发货订单"), inventoryListPage);
     auto *readyOrderLayout = new QVBoxLayout(readyOrderGroup);
     m_inventoryReadyOrderTableWidget = new QTableWidget(readyOrderGroup);
     m_inventoryReadyOrderTableWidget->setColumnCount(7);
@@ -1821,8 +1875,8 @@ void MainWindow::setupInventoryTab()
     inventoryListPageLayout->addWidget(readyOrderGroup);
 
     m_inventoryModeTabWidget->addTab(inventoryEntryPage, QStringLiteral("库存录入"));
-    m_inventoryModeTabWidget->addTab(inventoryListPage, QStringLiteral("当前库存列表"));
-    m_inventoryModeTabWidget->addTab(inventoryDemandPage, QStringLiteral("未发货订单物料需求"));
+    m_inventoryModeTabWidget->addTab(inventoryListPage, QStringLiteral("库存列表"));
+    m_inventoryModeTabWidget->addTab(inventoryDemandPage, QStringLiteral("库存需求"));
     rootLayout->addWidget(m_inventoryModeTabWidget);
 
     ui->mainTabWidget->insertTab(2, m_inventoryTab, QStringLiteral("库存管理"));
@@ -1839,9 +1893,11 @@ void MainWindow::setupInventoryTab()
     shipmentComponentPageLayout->setSpacing(16);
 
     auto *structuredShipmentReadyGroup =
-        new QGroupBox(QStringLiteral("新订单可发货提示"), shipmentOrderPage);
+        new QGroupBox(QStringLiteral("可发货订单"), shipmentOrderPage);
     auto *structuredShipmentReadyLayout = new QVBoxLayout(structuredShipmentReadyGroup);
-    m_structuredShipmentReadyLabel = new QLabel(QStringLiteral("基于 Milestone 5 新订单组件快照的可发货提示"), structuredShipmentReadyGroup);
+    m_structuredShipmentReadyLabel =
+        new QLabel(QStringLiteral("显示当前待发货订单的可发货状态。"),
+                   structuredShipmentReadyGroup);
     m_structuredShipmentReadyLabel->setWordWrap(true);
     structuredShipmentReadyLayout->addWidget(m_structuredShipmentReadyLabel);
     m_structuredShipmentReadyTableWidget = new QTableWidget(structuredShipmentReadyGroup);
@@ -1976,6 +2032,12 @@ void MainWindow::setupInventoryTab()
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
             [this](int) { refreshInventoryDemandShortageTable(); });
+    if (m_exportInventoryDemandButton != nullptr) {
+        connect(m_exportInventoryDemandButton,
+                &QPushButton::clicked,
+                this,
+                &MainWindow::exportInventoryDemandCsv);
+    }
 
     connect(m_inventoryComponentComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
@@ -3036,8 +3098,8 @@ void MainWindow::importBaseConfigurationBomCsv()
 void MainWindow::importInventoryItemsCsv()
 {
     runCsvImport(DataImporter::ImportTarget::InventoryItems,
-                 QStringLiteral("导入初始库存 CSV"),
-                 QStringLiteral("初始库存导入完成"),
+                 QStringLiteral("导入库存 CSV"),
+                 QStringLiteral("库存导入完成"),
                  true);
 }
 
@@ -3090,6 +3152,49 @@ void MainWindow::runCsvImport(DataImporter::ImportTarget target,
     showStatusMessage(successMessage, 3000);
 }
 
+void MainWindow::setupQueryOutputControls()
+{
+    if (ui == nullptr || ui->queryFilterLayout == nullptr || m_queryStartDateEdit != nullptr) {
+        return;
+    }
+
+    m_queryStartDateEdit = new QDateEdit(ui->queryGroupBox);
+    m_queryStartDateEdit->setCalendarPopup(true);
+    m_queryStartDateEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd"));
+    m_queryStartDateEdit->setDate(QDate::currentDate().addMonths(-1));
+
+    m_queryEndDateEdit = new QDateEdit(ui->queryGroupBox);
+    m_queryEndDateEdit->setCalendarPopup(true);
+    m_queryEndDateEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd"));
+    m_queryEndDateEdit->setDate(QDate::currentDate());
+
+    m_exportOrderSummaryButton = new QPushButton(QStringLiteral("导出订单汇总 CSV"), ui->queryGroupBox);
+    m_exportShipmentListButton = new QPushButton(QStringLiteral("导出发货清单 CSV"), ui->queryGroupBox);
+    m_printCurrentOrderButton = new QPushButton(QStringLiteral("打印当前订单"), ui->queryGroupBox);
+    m_exportOrderSummaryButton->setProperty("buttonRole", "secondary");
+    m_exportShipmentListButton->setProperty("buttonRole", "secondary");
+    m_printCurrentOrderButton->setProperty("buttonRole", "secondary");
+
+    ui->queryFilterLayout->addWidget(new QLabel(QStringLiteral("开始日期"), ui->queryGroupBox), 1, 0);
+    ui->queryFilterLayout->addWidget(m_queryStartDateEdit, 1, 1);
+    ui->queryFilterLayout->addWidget(new QLabel(QStringLiteral("结束日期"), ui->queryGroupBox), 1, 2);
+    ui->queryFilterLayout->addWidget(m_queryEndDateEdit, 1, 3);
+    ui->queryFilterLayout->addWidget(m_exportOrderSummaryButton, 1, 5);
+    ui->queryFilterLayout->addWidget(m_exportShipmentListButton, 1, 6);
+    ui->queryFilterLayout->addWidget(m_printCurrentOrderButton, 1, 7);
+}
+
+void MainWindow::setupInventoryOutputControls()
+{
+    if (m_inventoryModeTabWidget == nullptr || m_exportInventoryDemandButton != nullptr) {
+        return;
+    }
+
+    m_exportInventoryDemandButton =
+        new QPushButton(QStringLiteral("导出库存需求汇总 CSV"), m_inventoryModeTabWidget);
+    m_exportInventoryDemandButton->setProperty("buttonRole", "secondary");
+}
+
 void MainWindow::loadStructuredQuerySkus()
 {
     if (ui->queryProductModelComboBox == nullptr) {
@@ -3111,31 +3216,26 @@ void MainWindow::performStructuredOrderQuery()
         m_queryModeTabWidget->setCurrentIndex(0);
     }
 
-    m_structuredQueryOrders = m_databaseManager.structuredOrders(ui->queryOnlyUnfinishedCheckBox->isChecked());
-    const QString customerKeyword = ui->queryCustomerLineEdit->text().trimmed();
-    const int productSkuId = ui->queryProductModelComboBox->currentData().toInt();
+    StructuredOrderQueryFilter filter;
+    filter.startDate = m_queryStartDateEdit != nullptr
+                           ? m_queryStartDateEdit->date().toString(Qt::ISODate)
+                           : QString();
+    filter.endDate = m_queryEndDateEdit != nullptr
+                         ? m_queryEndDateEdit->date().toString(Qt::ISODate)
+                         : QString();
+    filter.customerKeyword = ui->queryCustomerLineEdit->text().trimmed();
+    filter.productSkuId = ui->queryProductModelComboBox->currentData().toInt();
+    filter.onlyOpen = ui->queryOnlyUnfinishedCheckBox->isChecked();
 
-    QList<StructuredOrderSummary> filteredOrders;
-    for (const StructuredOrderSummary &order : m_structuredQueryOrders) {
-        if (!customerKeyword.isEmpty() && !order.customerName.contains(customerKeyword, Qt::CaseInsensitive)) {
-            continue;
-        }
-        if (productSkuId > 0) {
-            bool matchSku = false;
-            for (const ProductSkuOption &sku : m_structuredQuerySkus) {
-                if (sku.id == productSkuId && sku.skuName == order.productSkuName) {
-                    matchSku = true;
-                    break;
-                }
-            }
-            if (!matchSku) {
-                continue;
-            }
-        }
-        filteredOrders.append(order);
+    if (m_queryStartDateEdit != nullptr && m_queryEndDateEdit != nullptr
+        && m_queryStartDateEdit->date() > m_queryEndDateEdit->date()) {
+        QMessageBox::warning(this, QStringLiteral("查询条件无效"), QStringLiteral("开始日期不能晚于结束日期。"));
+        return;
     }
 
-    setStructuredQueryOrderRows(filteredOrders);
+    m_structuredQueryOrders = m_databaseManager.structuredOrders(filter);
+    m_filteredStructuredQueryOrders = m_structuredQueryOrders;
+    setStructuredQueryOrderRows(m_filteredStructuredQueryOrders);
 }
 
 void MainWindow::setStructuredQueryOrderRows(const QList<StructuredOrderSummary> &orders)
@@ -3172,14 +3272,11 @@ void MainWindow::setStructuredQueryOrderRows(const QList<StructuredOrderSummary>
         ui->orderListTableWidget->setItem(
             row,
             kQueryOrderStatusColumn,
-            new QTableWidgetItem(order.status == QStringLiteral("completed")
-                                     ? QStringLiteral("已完成")
-                                     : QStringLiteral("未完成")));
+            new QTableWidgetItem(structuredOrderShipmentStatusText(order)));
         ui->orderListTableWidget->setItem(
             row,
             kQueryOrderShipmentReadyColumn,
-            new QTableWidgetItem(order.shipmentReady ? QStringLiteral("可发货")
-                                                     : QStringLiteral("不可发货")));
+            new QTableWidgetItem(structuredOrderReadinessText(order)));
     }
 
     applyDefaultAscendingSort(ui->orderListTableWidget, kQueryOrderIdColumn);
@@ -3251,6 +3348,255 @@ void MainWindow::setStructuredQueryComponentRows(
             kQueryDetailSourceColumn,
             new QTableWidgetItem(structuredSourceDisplayText(component.sourceType)));
     }
+}
+
+StructuredOrderSummary MainWindow::structuredOrderSummaryById(int orderId) const
+{
+    const QList<QList<StructuredOrderSummary>> sources = {m_filteredStructuredQueryOrders,
+                                                          m_structuredQueryOrders,
+                                                          m_shipmentOrders,
+                                                          m_structuredShipmentReadyOrders,
+                                                          m_inventoryBlockedOrders};
+    for (const QList<StructuredOrderSummary> &source : sources) {
+        for (const StructuredOrderSummary &order : source) {
+            if (order.id == orderId) {
+                return order;
+            }
+        }
+    }
+    return {};
+}
+
+bool MainWindow::writeCsvFile(const QString &dialogTitle,
+                              const QString &defaultFileName,
+                              const QStringList &headers,
+                              const QList<QStringList> &rows)
+{
+    const QString filePath = QFileDialog::getSaveFileName(
+        this,
+        dialogTitle,
+        defaultFileName,
+        QStringLiteral("CSV Files (*.csv);;All Files (*.*)"));
+    if (filePath.isEmpty()) {
+        return false;
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        QMessageBox::critical(this, QStringLiteral("导出失败"), file.errorString());
+        return false;
+    }
+
+    auto escapeCsv = [](QString value) {
+        value.replace(QStringLiteral("\""), QStringLiteral("\"\""));
+        if (value.contains(QLatin1Char(',')) || value.contains(QLatin1Char('"'))
+            || value.contains(QLatin1Char('\n')) || value.contains(QLatin1Char('\r'))) {
+            value = QStringLiteral("\"%1\"").arg(value);
+        }
+        return value;
+    };
+
+    QTextStream stream(&file);
+    stream.setEncoding(QStringConverter::Utf8);
+    QStringList escapedHeaders;
+    for (const QString &header : headers) {
+        escapedHeaders.append(escapeCsv(header));
+    }
+    stream << escapedHeaders.join(QStringLiteral(",")) << Qt::endl;
+    for (const QStringList &row : rows) {
+        QStringList escapedRow;
+        for (const QString &cell : row) {
+            escapedRow.append(escapeCsv(cell));
+        }
+        stream << escapedRow.join(QStringLiteral(",")) << Qt::endl;
+    }
+    file.close();
+    return true;
+}
+
+void MainWindow::exportOrderSummaryCsv()
+{
+    QList<QStringList> rows;
+    for (const StructuredOrderSummary &order : m_filteredStructuredQueryOrders) {
+        rows.append({QString::number(order.id),
+                     order.orderDate,
+                     order.customerName,
+                     order.productCategoryName,
+                     order.productSkuName,
+                     order.baseConfigurationName,
+                     QString::number(order.orderQuantity),
+                     structuredOrderShipmentStatusText(order),
+                     structuredOrderReadinessText(order)});
+    }
+
+    if (writeCsvFile(QStringLiteral("导出订单汇总"),
+                     QStringLiteral("订单汇总.csv"),
+                     {QStringLiteral("订单ID"),
+                      QStringLiteral("订单日期"),
+                      QStringLiteral("客户"),
+                      QStringLiteral("产品类型"),
+                      QStringLiteral("具体型号"),
+                      QStringLiteral("基础配置"),
+                      QStringLiteral("数量"),
+                      QStringLiteral("发货状态"),
+                      QStringLiteral("可发货")},
+                     rows)) {
+        showStatusMessage(QStringLiteral("订单汇总已导出"), 3000);
+    }
+}
+
+void MainWindow::exportInventoryDemandCsv()
+{
+    QList<QStringList> rows;
+    for (const InventoryDemandSummaryRow &row : m_inventoryDemandSummaryRows) {
+        rows.append({row.productCategoryName,
+                     row.componentName,
+                     row.componentSpec,
+                     row.material,
+                     row.color,
+                     row.unitName,
+                     QString::number(row.totalDemandQuantity),
+                     QString::number(row.currentInventoryQuantity),
+                     QString::number(row.shortageQuantity)});
+    }
+
+    if (writeCsvFile(QStringLiteral("导出库存需求汇总"),
+                     QStringLiteral("库存需求汇总.csv"),
+                     {QStringLiteral("产品类型"),
+                      QStringLiteral("物料名称"),
+                      QStringLiteral("规格"),
+                      QStringLiteral("材质"),
+                      QStringLiteral("颜色"),
+                      QStringLiteral("单位"),
+                      QStringLiteral("需求数量"),
+                      QStringLiteral("库存数量"),
+                      QStringLiteral("缺口数量")},
+                     rows)) {
+        showStatusMessage(QStringLiteral("库存需求汇总已导出"), 3000);
+    }
+}
+
+void MainWindow::exportCurrentOrderShipmentCsv()
+{
+    const int orderId = currentQueryOrderId();
+    if (orderId <= 0) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"), QStringLiteral("请先在订单查询中选择一个订单。"));
+        return;
+    }
+
+    const StructuredOrderSummary order = structuredOrderSummaryById(orderId);
+    const QList<StructuredOrderComponentSnapshot> components =
+        m_databaseManager.structuredOrderComponents(orderId);
+    QList<QStringList> rows;
+    for (const StructuredOrderComponentSnapshot &component : components) {
+        rows.append({QString::number(order.id),
+                     order.customerName,
+                     order.productSkuName,
+                     order.baseConfigurationName,
+                     component.componentName,
+                     component.componentSpec,
+                     component.material,
+                     component.color,
+                     component.unitName,
+                     QString::number(component.quantityPerSet),
+                     QString::number(component.requiredQuantity),
+                     QString::number(component.shippedQuantity),
+                     QString::number(component.unshippedQuantity)});
+    }
+
+    if (writeCsvFile(QStringLiteral("导出发货清单"),
+                     QStringLiteral("订单_%1_发货清单.csv").arg(orderId),
+                     {QStringLiteral("订单ID"),
+                      QStringLiteral("客户"),
+                      QStringLiteral("具体型号"),
+                      QStringLiteral("基础配置"),
+                      QStringLiteral("组件名称"),
+                      QStringLiteral("规格"),
+                      QStringLiteral("材质"),
+                      QStringLiteral("颜色"),
+                      QStringLiteral("单位"),
+                      QStringLiteral("每套数量"),
+                      QStringLiteral("需求数量"),
+                      QStringLiteral("已发数量"),
+                      QStringLiteral("未发数量")},
+                     rows)) {
+        showStatusMessage(QStringLiteral("发货清单已导出"), 3000);
+    }
+}
+
+QString MainWindow::buildPrintableOrderText(int orderId)
+{
+    const StructuredOrderSummary order = structuredOrderSummaryById(orderId);
+    if (order.id <= 0) {
+        return QString();
+    }
+
+    QString text;
+    QTextStream stream(&text);
+    stream << "订单打印单" << Qt::endl
+           << "订单ID: " << order.id << Qt::endl
+           << "订单日期: " << order.orderDate << Qt::endl
+           << "客户: " << order.customerName << Qt::endl
+           << "产品类型: " << order.productCategoryName << Qt::endl
+           << "具体型号: " << order.productSkuName << Qt::endl
+           << "基础配置: " << order.baseConfigurationName << Qt::endl
+           << "数量: " << order.orderQuantity << Qt::endl
+           << "订单状态: " << structuredOrderShipmentStatusText(order) << Qt::endl
+           << Qt::endl
+           << "订单组件" << Qt::endl;
+
+    for (const StructuredOrderComponentSnapshot &component :
+         m_databaseManager.structuredOrderComponents(orderId)) {
+        stream << component.componentName;
+        if (!component.componentSpec.trimmed().isEmpty()) {
+            stream << " | " << component.componentSpec;
+        }
+        stream << " | 需求数量 " << component.requiredQuantity
+               << " | 已发数量 " << component.shippedQuantity
+               << " | 未发数量 " << component.unshippedQuantity << Qt::endl;
+    }
+
+    const QList<OrderShipmentRecord> shipments = m_databaseManager.structuredOrderShipments(orderId);
+    if (!shipments.isEmpty()) {
+        stream << Qt::endl << "发货记录" << Qt::endl;
+        for (const OrderShipmentRecord &record : shipments) {
+            stream << record.shipmentDate << " | " << record.shipmentType << " | "
+                   << record.shipmentQuantity;
+            if (!record.note.trimmed().isEmpty()) {
+                stream << " | " << record.note;
+            }
+            stream << Qt::endl;
+        }
+    }
+
+    return text;
+}
+
+void MainWindow::printCurrentOrder()
+{
+    const int orderId = currentQueryOrderId();
+    if (orderId <= 0) {
+        QMessageBox::warning(this, QStringLiteral("打印失败"), QStringLiteral("请先在订单查询中选择一个订单。"));
+        return;
+    }
+
+    const QString printableText = buildPrintableOrderText(orderId);
+    if (printableText.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("打印失败"), QStringLiteral("未找到当前订单内容。"));
+        return;
+    }
+
+    QPrinter printer(QPrinter::HighResolution);
+    QPrintDialog dialog(&printer, this);
+    dialog.setWindowTitle(QStringLiteral("打印订单"));
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QTextDocument document;
+    document.setPlainText(printableText);
+    document.print(&printer);
+    showStatusMessage(QStringLiteral("订单打印任务已发送"), 3000);
 }
 
 void MainWindow::loadInventoryPage()
@@ -3530,7 +3876,7 @@ void MainWindow::refreshInventoryDemandScopeOptions()
     const int previousOrderId = currentInventoryDemandOrderId();
     const QSignalBlocker blocker(m_inventoryDemandScopeComboBox);
     m_inventoryDemandScopeComboBox->clear();
-    m_inventoryDemandScopeComboBox->addItem(QStringLiteral("全部未满足订单总缺料"), 0);
+    m_inventoryDemandScopeComboBox->addItem(QStringLiteral("全部未发订单需求汇总"), 0);
     for (const StructuredOrderSummary &order : m_inventoryBlockedOrders) {
         m_inventoryDemandScopeComboBox->addItem(structuredShipmentOrderDisplayText(order), order.id);
     }
@@ -3549,82 +3895,62 @@ void MainWindow::refreshInventoryDemandShortageTable()
         return;
     }
 
-    QList<InventoryShortageRow> shortages;
-    const QList<InventoryItemData> inventoryRows = m_databaseManager.inventoryItems();
-    const QList<ProductCategoryOption> categories = m_databaseManager.productCategories();
-
-    QHash<QString, int> inventoryQuantities;
-    for (const InventoryItemData &item : inventoryRows) {
-        const QString key = inventoryDemandIdentityKey(item.productCategoryId,
-                                                       item.componentName,
-                                                       item.componentSpec,
-                                                       item.material,
-                                                       item.color,
-                                                       item.unitName);
-        inventoryQuantities[key] += item.currentQuantity;
-    }
-
-    QHash<QString, int> categoryIdsByName;
-    for (const ProductCategoryOption &category : categories) {
-        categoryIdsByName.insert(category.name, category.id);
-    }
-
-    QHash<QString, InventoryShortageRow> demandRows;
-    auto appendOrderDemands = [&](const StructuredOrderSummary &order) {
-        const int productCategoryId = categoryIdsByName.value(order.productCategoryName);
-        for (const StructuredOrderComponentSnapshot &component :
-             m_databaseManager.structuredOrderComponents(order.id)) {
-            if (component.unshippedQuantity <= 0) {
-                continue;
-            }
-
-            const QString key = inventoryDemandIdentityKey(productCategoryId,
-                                                           component.componentName,
-                                                           component.componentSpec,
-                                                           component.material,
-                                                           component.color,
-                                                           component.unitName);
-            InventoryShortageRow &row = demandRows[key];
-            if (row.componentName.isEmpty()) {
-                row.productCategoryId = productCategoryId;
-                row.productCategoryName = order.productCategoryName;
-                row.componentName = component.componentName;
-                row.componentSpec = component.componentSpec;
-                row.material = component.material;
-                row.color = component.color;
-                row.unitName = component.unitName;
-            }
-            row.quantity += component.unshippedQuantity;
-        }
-    };
-
+    QList<InventoryDemandSummaryRow> rows;
     const int scopeOrderId = currentInventoryDemandOrderId();
-    if (scopeOrderId > 0) {
-        for (const StructuredOrderSummary &order : m_inventoryBlockedOrders) {
-            if (order.id == scopeOrderId) {
-                appendOrderDemands(order);
-                break;
-            }
-        }
+    if (scopeOrderId <= 0) {
+        m_inventoryDemandSummaryRows = m_databaseManager.inventoryDemandSummary();
+        rows = m_inventoryDemandSummaryRows;
     } else {
-        for (const StructuredOrderSummary &order : m_inventoryBlockedOrders) {
-            appendOrderDemands(order);
-        }
-    }
+        StructuredOrderSummary order = structuredOrderSummaryById(scopeOrderId);
+        if (order.id > 0) {
+            QHash<QString, InventoryDemandSummaryRow> demandMap;
+            QHash<QString, int> inventoryQuantities;
+            for (const InventoryItemData &item : m_databaseManager.inventoryItems()) {
+                const QString key = inventoryDemandIdentityKey(item.productCategoryId,
+                                                               item.componentName,
+                                                               item.componentSpec,
+                                                               item.material,
+                                                               item.color,
+                                                               item.unitName);
+                inventoryQuantities[key] += item.currentQuantity;
+            }
 
-    for (auto it = demandRows.cbegin(); it != demandRows.cend(); ++it) {
-        InventoryShortageRow row = it.value();
-        row.quantity =
-            qMax(0, row.quantity - inventoryQuantities.value(it.key(), 0));
-        if (row.quantity > 0) {
-            shortages.append(row);
+            for (const StructuredOrderComponentSnapshot &component :
+                 m_databaseManager.structuredOrderComponents(scopeOrderId)) {
+                if (component.unshippedQuantity <= 0) {
+                    continue;
+                }
+
+                const QString key = inventoryDemandIdentityKey(order.productCategoryId,
+                                                               component.componentName,
+                                                               component.componentSpec,
+                                                               component.material,
+                                                               component.color,
+                                                               component.unitName);
+                InventoryDemandSummaryRow &row = demandMap[key];
+                if (row.componentName.isEmpty()) {
+                    row.productCategoryId = order.productCategoryId;
+                    row.productCategoryName = order.productCategoryName;
+                    row.componentName = component.componentName;
+                    row.componentSpec = component.componentSpec;
+                    row.material = component.material;
+                    row.color = component.color;
+                    row.unitName = component.unitName;
+                }
+                row.totalDemandQuantity += component.unshippedQuantity;
+                row.currentInventoryQuantity = inventoryQuantities.value(key, 0);
+                row.shortageQuantity =
+                    qMax(0, row.totalDemandQuantity - row.currentInventoryQuantity);
+            }
+            rows = demandMap.values();
         }
     }
+    m_inventoryDemandSummaryRows = rows;
 
     m_demandSummaryTableWidget->setSortingEnabled(false);
     const QSignalBlocker blocker(m_demandSummaryTableWidget);
     m_demandSummaryTableWidget->setRowCount(0);
-    for (const InventoryShortageRow &rowData : shortages) {
+    for (const InventoryDemandSummaryRow &rowData : rows) {
         const int row = m_demandSummaryTableWidget->rowCount();
         m_demandSummaryTableWidget->insertRow(row);
         m_demandSummaryTableWidget->setItem(row,
@@ -3646,8 +3972,14 @@ void MainWindow::refreshInventoryDemandShortageTable()
                                             kDemandSummaryUnitColumn,
                                             new QTableWidgetItem(rowData.unitName));
         m_demandSummaryTableWidget->setItem(row,
-                                            kDemandSummaryQuantityColumn,
-                                            new QTableWidgetItem(QString::number(rowData.quantity)));
+                                            kDemandSummaryDemandColumn,
+                                            new QTableWidgetItem(QString::number(rowData.totalDemandQuantity)));
+        m_demandSummaryTableWidget->setItem(row,
+                                            kDemandSummaryInventoryColumn,
+                                            new QTableWidgetItem(QString::number(rowData.currentInventoryQuantity)));
+        m_demandSummaryTableWidget->setItem(row,
+                                            kDemandSummaryGapColumn,
+                                            new QTableWidgetItem(QString::number(rowData.shortageQuantity)));
     }
     m_demandSummaryTableWidget->setSortingEnabled(true);
 }
@@ -3681,8 +4013,7 @@ void MainWindow::refreshShipmentReadyTables()
                                  new QTableWidgetItem(QString::number(order.orderQuantity)));
             tableWidget->setItem(row,
                                  kReadyOrderStatusColumn,
-                                 new QTableWidgetItem(order.shipmentReady ? QStringLiteral("可发货")
-                                                                          : QStringLiteral("不可发货")));
+                                 new QTableWidgetItem(structuredOrderReadinessText(order)));
         }
         applyDefaultAscendingSort(tableWidget, kReadyOrderIdColumn);
     };
@@ -3717,7 +4048,7 @@ void MainWindow::refreshStructuredShipmentReadySummary()
     }
 
     m_structuredShipmentReadyLabel->setText(
-        QStringLiteral("基于 Milestone 5 新订单组件快照：可发货 %1 单，不可发货 %2 单。")
+        QStringLiteral("当前订单中，可发货 %1 单，不可发货 %2 单。")
             .arg(readyCount)
             .arg(blockedCount));
 }
@@ -3794,7 +4125,7 @@ void MainWindow::refreshStructuredShipmentDetails()
 
     const int orderId = currentStructuredShipmentOrderId();
     if (orderId <= 0) {
-        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无新订单可显示"));
+        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无订单数据"));
         setStructuredShipmentComponentRows({});
         return;
     }
@@ -3810,24 +4141,21 @@ void MainWindow::refreshStructuredShipmentDetails()
     }
 
     if (!found) {
-        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无新订单可显示"));
+        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无订单数据"));
         setStructuredShipmentComponentRows({});
         return;
     }
 
     ui->shipmentOrderStatusValueLabel->setText(
-        QStringLiteral("订单 #%1 | %2 | %3 | %4 | %5 套 | 可整套再发 %6 | 灯罩价格 %7 | 配置价格 %8 | %9")
+        QStringLiteral("订单 #%1 | %2 | %3 | %4 | %5 套 | 可整套再发 %6 | 配置价格 %7 | %8")
             .arg(currentOrder.id)
             .arg(currentOrder.customerName)
             .arg(currentOrder.productSkuName)
             .arg(currentOrder.baseConfigurationName)
             .arg(currentOrder.orderQuantity)
             .arg(currentOrder.availableSetShipments)
-            .arg(QString::number(currentOrder.lampshadeUnitPrice, 'f', 2))
             .arg(QString::number(currentOrder.configPrice, 'f', 2))
-            .arg(currentOrder.isCompleted ? QStringLiteral("订单已完成")
-                                          : currentOrder.shipmentReady ? QStringLiteral("可发货")
-                                                                       : QStringLiteral("不可发货")));
+            .arg(structuredOrderShipmentStatusText(currentOrder)));
     setStructuredShipmentComponentRows(m_databaseManager.structuredOrderComponents(orderId));
 }
 
@@ -3862,7 +4190,7 @@ void MainWindow::loadProductModels()
     }
 
     if (ui->productModelComboBox->count() == 0) {
-        showStatusMessage(QStringLiteral("没有可用的产品型号数据"), 5000);
+        showStatusMessage(QStringLiteral("没有可用的具体型号数据"), 5000);
     }
 
     m_updatingComponentTable = false;
@@ -4229,7 +4557,7 @@ bool MainWindow::validateOrderInput(QString *errorMessage) const
     }
 
     if (ui->productModelComboBox->currentIndex() < 0) {
-        *errorMessage = QStringLiteral("请选择产品型号。");
+        *errorMessage = QStringLiteral("请选择具体型号。");
         return false;
     }
 
@@ -4536,7 +4864,7 @@ void MainWindow::refreshShipmentDetails()
     }
 
     if (!hasOrder) {
-        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无可发货新订单"));
+        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("暂无待发货订单"));
         ui->shipmentSetsSpinBox->setMaximum(1);
         ui->shipmentSetsSpinBox->setValue(0);
         ui->saveOrderShipmentButton->setEnabled(false);
@@ -4547,26 +4875,16 @@ void MainWindow::refreshShipmentDetails()
         return;
     }
 
-    QString completionText;
-    if (currentOrder.isCompleted) {
-        completionText = QStringLiteral("订单已完成");
-    } else if (currentOrder.availableSetShipments == 0) {
-        completionText = QStringLiteral("组件不足以继续整套发货");
-    } else {
-        completionText = QStringLiteral("订单未完成");
-    }
-
     ui->shipmentOrderStatusValueLabel->setText(
-        QStringLiteral("订单 #%1 | %2 | %3 | %4 | 总套数 %5 | 可整套再发 %6 | 灯罩价格 %7 | 配置价格 %8 | 状态：%9")
+        QStringLiteral("订单 #%1 | %2 | %3 | %4 | 总套数 %5 | 可整套再发 %6 | 配置价格 %7 | 状态：%8")
             .arg(currentOrder.id)
             .arg(currentOrder.customerName)
             .arg(currentOrder.productSkuName)
             .arg(currentOrder.baseConfigurationName)
             .arg(currentOrder.orderQuantity)
             .arg(currentOrder.availableSetShipments)
-            .arg(QString::number(currentOrder.lampshadeUnitPrice, 'f', 2))
             .arg(QString::number(currentOrder.configPrice, 'f', 2))
-            .arg(completionText));
+            .arg(structuredOrderShipmentStatusText(currentOrder)));
     ui->shipmentOrderNoteLineEdit->clear();
     ui->componentShipmentNoteLineEdit->clear();
     ui->shipmentSetsSpinBox->setMaximum(qMax(1, currentOrder.availableSetShipments));

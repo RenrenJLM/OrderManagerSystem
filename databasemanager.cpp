@@ -54,7 +54,7 @@ bool DatabaseManager::initialize()
     return openDatabase() && enableForeignKeys() && createTables() && repairShipmentData();
 }
 
-bool DatabaseManager::ensureMinimumDemoData()
+bool DatabaseManager::ensureRequiredReferenceData()
 {
     QSqlDatabase database = QSqlDatabase::database(kConnectionName);
     if (!database.isValid() || !database.isOpen()) {
@@ -62,137 +62,7 @@ bool DatabaseManager::ensureMinimumDemoData()
         return false;
     }
 
-    if (!ensureMinimumStructuredDemoData(database)) {
-        return false;
-    }
-
-    QSqlQuery countQuery(database);
-    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM product_models;")) || !countQuery.next()) {
-        m_lastError = countQuery.lastError().text();
-        return false;
-    }
-
-    if (countQuery.value(0).toInt() > 0) {
-        return ensureMinimumComponentCatalogData(database);
-    }
-
-    if (!database.transaction()) {
-        m_lastError = database.lastError().text();
-        return false;
-    }
-
-    QSqlQuery insertProduct(database);
-    insertProduct.prepare(QStringLiteral(
-        "INSERT INTO product_models (name, default_price, created_at) VALUES (?, ?, ?);"));
-
-    insertProduct.bindValue(0, QStringLiteral("OMS-标准灯箱"));
-    insertProduct.bindValue(1, 1200.0);
-    insertProduct.bindValue(2, currentTimestamp());
-    if (!insertProduct.exec()) {
-        m_lastError = insertProduct.lastError().text();
-        database.rollback();
-        return false;
-    }
-    const int lightBoxModelId = insertProduct.lastInsertId().toInt();
-
-    insertProduct.bindValue(0, QStringLiteral("OMS-展示架"));
-    insertProduct.bindValue(1, 800.0);
-    insertProduct.bindValue(2, currentTimestamp());
-    if (!insertProduct.exec()) {
-        m_lastError = insertProduct.lastError().text();
-        database.rollback();
-        return false;
-    }
-    const int standModelId = insertProduct.lastInsertId().toInt();
-
-    QSqlQuery insertTemplate(database);
-    insertTemplate.prepare(QStringLiteral(
-        "INSERT INTO option_templates (product_model_id, name, created_at) VALUES (?, ?, ?);"));
-
-    insertTemplate.bindValue(0, lightBoxModelId);
-    insertTemplate.bindValue(1, QStringLiteral("标准A配置"));
-    insertTemplate.bindValue(2, currentTimestamp());
-    if (!insertTemplate.exec()) {
-        m_lastError = insertTemplate.lastError().text();
-        database.rollback();
-        return false;
-    }
-    const int standardATemplateId = insertTemplate.lastInsertId().toInt();
-
-    insertTemplate.bindValue(0, lightBoxModelId);
-    insertTemplate.bindValue(1, QStringLiteral("标准B配置"));
-    insertTemplate.bindValue(2, currentTimestamp());
-    if (!insertTemplate.exec()) {
-        m_lastError = insertTemplate.lastError().text();
-        database.rollback();
-        return false;
-    }
-    const int standardBTemplateId = insertTemplate.lastInsertId().toInt();
-
-    insertTemplate.bindValue(0, standModelId);
-    insertTemplate.bindValue(1, QStringLiteral("展示架基础配置"));
-    insertTemplate.bindValue(2, currentTimestamp());
-    if (!insertTemplate.exec()) {
-        m_lastError = insertTemplate.lastError().text();
-        database.rollback();
-        return false;
-    }
-    const int standTemplateId = insertTemplate.lastInsertId().toInt();
-
-    QSqlQuery insertComponent(database);
-    insertComponent.prepare(QStringLiteral(
-        "INSERT INTO option_template_components "
-        "(option_template_id, component_name, quantity_per_set, unit_price) VALUES (?, ?, ?, ?);"));
-
-    const QList<OrderComponentData> standardAComponents = {
-        {QStringLiteral("光源"), 2, 90.0, QString()},
-        {QStringLiteral("灯罩"), 4, 25.0, QString()},
-        {QStringLiteral("电源"), 1, 180.0, QString()}
-    };
-    const QList<OrderComponentData> standardBComponents = {
-        {QStringLiteral("光源"), 3, 90.0, QString()},
-        {QStringLiteral("灯罩"), 6, 25.0, QString()},
-        {QStringLiteral("白色机头"), 1, 220.0, QString()}
-    };
-    const QList<OrderComponentData> standComponents = {
-        {QStringLiteral("主架"), 1, 160.0, QString()},
-        {QStringLiteral("连接件"), 6, 18.0, QString()},
-        {QStringLiteral("底座"), 2, 45.0, QString()}
-    };
-
-    const auto insertComponents = [&](int templateId, const QList<OrderComponentData> &components) {
-        for (const OrderComponentData &component : components) {
-            insertComponent.bindValue(0, templateId);
-            insertComponent.bindValue(1, component.componentName);
-            insertComponent.bindValue(2, component.quantityPerSet);
-            insertComponent.bindValue(3, component.unitPrice);
-            if (!insertComponent.exec()) {
-                m_lastError = insertComponent.lastError().text();
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!insertComponents(standardATemplateId, standardAComponents)
-        || !insertComponents(standardBTemplateId, standardBComponents)
-        || !insertComponents(standTemplateId, standComponents)) {
-        database.rollback();
-        return false;
-    }
-
-    if (!ensureMinimumComponentCatalogData(database)) {
-        database.rollback();
-        return false;
-    }
-
-    if (!database.commit()) {
-        m_lastError = database.lastError().text();
-        database.rollback();
-        return false;
-    }
-
-    return true;
+    return ensureStructuredReferenceData(database);
 }
 
 QList<ProductModelOption> DatabaseManager::productModels()
@@ -1392,21 +1262,53 @@ bool DatabaseManager::saveStructuredOrder(const StructuredOrderSaveData &orderDa
 
 QList<StructuredOrderSummary> DatabaseManager::structuredOrders(bool onlyOpen)
 {
+    StructuredOrderQueryFilter filter;
+    filter.onlyOpen = onlyOpen;
+    return structuredOrders(filter);
+}
+
+QList<StructuredOrderSummary> DatabaseManager::structuredOrders(const StructuredOrderQueryFilter &filter)
+{
     QList<StructuredOrderSummary> orders;
     QSqlDatabase database = QSqlDatabase::database(kConnectionName);
     QSqlQuery query(database);
     QString statement = QStringLiteral(
-        "SELECT id, order_date, customer_name, product_category_name, product_sku_name, "
+        "SELECT id, order_date, customer_name, product_category_id, product_category_name, product_sku_name, "
         "base_configuration_name, order_quantity, lampshade_name, lampshade_unit_price, "
-        "config_price, status "
+        "config_price, status, product_sku_id, "
+        "EXISTS(SELECT 1 FROM structured_shipment_records WHERE structured_shipment_records.order_id = orders.id) "
         "FROM orders");
 
-    if (onlyOpen) {
-        statement += QStringLiteral(" WHERE status != 'completed'");
+    QStringList conditions;
+    QList<QVariant> bindValues;
+    if (filter.onlyOpen) {
+        conditions.append(QStringLiteral("status != 'completed'"));
+    }
+    if (!filter.startDate.trimmed().isEmpty()) {
+        conditions.append(QStringLiteral("order_date >= ?"));
+        bindValues.append(filter.startDate.trimmed());
+    }
+    if (!filter.endDate.trimmed().isEmpty()) {
+        conditions.append(QStringLiteral("order_date <= ?"));
+        bindValues.append(filter.endDate.trimmed());
+    }
+    if (!filter.customerKeyword.trimmed().isEmpty()) {
+        conditions.append(QStringLiteral("customer_name LIKE ?"));
+        bindValues.append(QStringLiteral("%") + filter.customerKeyword.trimmed() + QStringLiteral("%"));
+    }
+    if (filter.productSkuId > 0) {
+        conditions.append(QStringLiteral("product_sku_id = ?"));
+        bindValues.append(filter.productSkuId);
+    }
+    if (!conditions.isEmpty()) {
+        statement += QStringLiteral(" WHERE ") + conditions.join(QStringLiteral(" AND "));
     }
     statement += QStringLiteral(" ORDER BY id DESC;");
 
     query.prepare(statement);
+    for (const QVariant &bindValue : bindValues) {
+        query.addBindValue(bindValue);
+    }
     if (!query.exec()) {
         m_lastError = query.lastError().text();
         return orders;
@@ -1417,14 +1319,16 @@ QList<StructuredOrderSummary> DatabaseManager::structuredOrders(bool onlyOpen)
         order.id = query.value(0).toInt();
         order.orderDate = query.value(1).toString();
         order.customerName = query.value(2).toString();
-        order.productCategoryName = query.value(3).toString();
-        order.productSkuName = query.value(4).toString();
-        order.baseConfigurationName = query.value(5).toString();
-        order.orderQuantity = query.value(6).toInt();
-        order.lampshadeName = query.value(7).toString();
-        order.lampshadeUnitPrice = query.value(8).toDouble();
-        order.configPrice = query.value(9).toDouble();
-        order.status = query.value(10).toString();
+        order.productCategoryId = query.value(3).toInt();
+        order.productCategoryName = query.value(4).toString();
+        order.productSkuName = query.value(5).toString();
+        order.baseConfigurationName = query.value(6).toString();
+        order.orderQuantity = query.value(7).toInt();
+        order.lampshadeName = query.value(8).toString();
+        order.lampshadeUnitPrice = query.value(9).toDouble();
+        order.configPrice = query.value(10).toDouble();
+        order.status = query.value(11).toString();
+        order.hasShipmentRecord = query.value(13).toBool();
         QString errorMessage;
         order.availableSetShipments =
             availableSetShipmentsForStructuredOrder(database, order.id, &errorMessage);
@@ -1761,6 +1665,57 @@ QList<OrderMaterialDemandData> DatabaseManager::unshippedOrderMaterialDemands()
     }
 
     return demands;
+}
+
+QList<InventoryDemandSummaryRow> DatabaseManager::inventoryDemandSummary()
+{
+    QList<InventoryDemandSummaryRow> rows;
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT o.product_category_id, o.product_category_name, "
+        "oc.component_name, COALESCE(oc.component_spec, ''), COALESCE(oc.material, ''), "
+        "COALESCE(oc.color, ''), COALESCE(oc.unit_name, '件'), "
+        "SUM(oc.unshipped_quantity) AS total_demand, "
+        "COALESCE(("
+        "    SELECT SUM(ii.current_quantity) "
+        "    FROM inventory_items ii "
+        "    WHERE ii.product_category_id = o.product_category_id "
+        "      AND ii.component_name = oc.component_name "
+        "      AND COALESCE(ii.component_spec, '') = COALESCE(oc.component_spec, '') "
+        "      AND COALESCE(ii.material, '') = COALESCE(oc.material, '') "
+        "      AND COALESCE(ii.color, '') = COALESCE(oc.color, '') "
+        "      AND COALESCE(ii.unit_name, '件') = COALESCE(oc.unit_name, '件')"
+        "), 0) AS current_inventory "
+        "FROM order_components oc "
+        "JOIN orders o ON o.id = oc.order_id "
+        "WHERE oc.unshipped_quantity > 0 AND o.status != 'completed' "
+        "GROUP BY o.product_category_id, o.product_category_name, oc.component_name, "
+        "COALESCE(oc.component_spec, ''), COALESCE(oc.material, ''), "
+        "COALESCE(oc.color, ''), COALESCE(oc.unit_name, '件') "
+        "ORDER BY o.product_category_name ASC, oc.component_name ASC, COALESCE(oc.component_spec, '') ASC;"));
+
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return rows;
+    }
+
+    while (query.next()) {
+        InventoryDemandSummaryRow row;
+        row.productCategoryId = query.value(0).toInt();
+        row.productCategoryName = query.value(1).toString();
+        row.componentName = query.value(2).toString();
+        row.componentSpec = query.value(3).toString();
+        row.material = query.value(4).toString();
+        row.color = query.value(5).toString();
+        row.unitName = query.value(6).toString();
+        row.totalDemandQuantity = query.value(7).toInt();
+        row.currentInventoryQuantity = query.value(8).toInt();
+        row.shortageQuantity =
+            qMax(0, row.totalDemandQuantity - row.currentInventoryQuantity);
+        rows.append(row);
+    }
+
+    return rows;
 }
 
 QList<InventoryItemData> DatabaseManager::inventoryItems()
@@ -2526,7 +2481,7 @@ double DatabaseManager::productDefaultPrice(QSqlDatabase &database,
         if (errorMessage != nullptr) {
             *errorMessage = query.lastError().isValid()
                                 ? query.lastError().text()
-                                : QStringLiteral("未找到产品型号默认价格。");
+                                : QStringLiteral("未找到具体型号默认价格。");
         }
         return 0.0;
     }
@@ -2595,7 +2550,7 @@ bool DatabaseManager::ensureMinimumComponentCatalogData(QSqlDatabase &database)
     return true;
 }
 
-bool DatabaseManager::ensureMinimumStructuredDemoData(QSqlDatabase &database)
+bool DatabaseManager::ensureStructuredReferenceData(QSqlDatabase &database)
 {
     if (!database.isValid() || !database.isOpen()) {
         m_lastError = QStringLiteral("Database connection is not available.");
@@ -2848,7 +2803,7 @@ bool DatabaseManager::ensureMinimumStructuredDemoData(QSqlDatabase &database)
         insertInventory.bindValue(5, item.unitName);
         insertInventory.bindValue(6, item.unitPrice);
         insertInventory.bindValue(7, 20);
-        insertInventory.bindValue(8, QStringLiteral("初始化样例库存"));
+        insertInventory.bindValue(8, QStringLiteral("系统初始化库存"));
         insertInventory.bindValue(9, timestamp);
         if (!insertInventory.exec()) {
             m_lastError = insertInventory.lastError().text();

@@ -2,7 +2,6 @@
 #include "mainwindow.h"
 
 #include <QApplication>
-#include <QDebug>
 #include <QLocale>
 #include <QMessageBox>
 #include <QTranslator>
@@ -12,6 +11,7 @@
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    a.setApplicationName(QStringLiteral("订单管理系统"));
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
@@ -26,13 +26,12 @@ int main(int argc, char *argv[])
     DatabaseManager databaseManager;
     if (!databaseManager.initialize()) {
         QMessageBox::critical(nullptr,
-                              QStringLiteral("Database Initialization Failed"),
+                              QStringLiteral("数据库初始化失败"),
                               databaseManager.lastError());
         return 1;
     }
 
     auto window = std::make_unique<MainWindow>();
-    qDebug() << "Showing main window";
     window->show();
     return QCoreApplication::exec();
 }

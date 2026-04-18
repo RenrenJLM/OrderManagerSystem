@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 project(OrderManagerSystem LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Sql LinguistTools)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Sql PrintSupport LinguistTools)
 
 qt_standard_project_setup()
 
@@ -38,6 +38,7 @@ qt_add_translations(
 target_link_libraries(OrderManagerSystem
     PRIVATE
         Qt::Core
+        Qt::PrintSupport
         Qt::Sql
         Qt::Widgets
 )

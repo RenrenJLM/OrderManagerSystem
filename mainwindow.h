@@ -95,11 +95,23 @@ private:
                       const QString &dialogTitle,
                       const QString &successMessage,
                       bool inventoryImport);
+    void setupQueryOutputControls();
+    void setupInventoryOutputControls();
     void loadStructuredQuerySkus();
     void performStructuredOrderQuery();
     void setStructuredQueryOrderRows(const QList<StructuredOrderSummary> &orders);
     void refreshStructuredQueryOrderDetails();
     void setStructuredQueryComponentRows(const QList<StructuredOrderComponentSnapshot> &components);
+    void exportOrderSummaryCsv();
+    void exportInventoryDemandCsv();
+    void exportCurrentOrderShipmentCsv();
+    void printCurrentOrder();
+    StructuredOrderSummary structuredOrderSummaryById(int orderId) const;
+    QString buildPrintableOrderText(int orderId);
+    bool writeCsvFile(const QString &dialogTitle,
+                      const QString &defaultFileName,
+                      const QStringList &headers,
+                      const QList<QStringList> &rows);
     void loadInventoryPage();
     void populateInventoryForm(const InventoryItemData &item);
     void clearInventoryForm();
@@ -192,12 +204,20 @@ private:
     QLabel *m_structuredShipmentReadyLabel = nullptr;
     QTableWidget *m_structuredShipmentReadyTableWidget = nullptr;
     QTabWidget *m_shipmentModeTabWidget = nullptr;
+    QDateEdit *m_queryStartDateEdit = nullptr;
+    QDateEdit *m_queryEndDateEdit = nullptr;
+    QPushButton *m_exportOrderSummaryButton = nullptr;
+    QPushButton *m_exportInventoryDemandButton = nullptr;
+    QPushButton *m_exportShipmentListButton = nullptr;
+    QPushButton *m_printCurrentOrderButton = nullptr;
     QList<ProductSkuOption> m_structuredQuerySkus;
     QList<StructuredOrderSummary> m_structuredQueryOrders;
+    QList<StructuredOrderSummary> m_filteredStructuredQueryOrders;
     QList<StructuredOrderSummary> m_structuredShipmentReadyOrders;
     QList<StructuredOrderSummary> m_inventoryBlockedOrders;
     QList<StructuredOrderSummary> m_shipmentOrders;
     QList<StructuredOrderComponentSnapshot> m_shipmentComponents;
+    QList<InventoryDemandSummaryRow> m_inventoryDemandSummaryRows;
     QList<ProductComponentOption> m_customComponentOptions;
     QList<ShipmentOrderSummary> m_queryOrders;
     QTimer *m_statusMessageClearTimer = nullptr;
