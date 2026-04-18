@@ -22,7 +22,13 @@ struct ProductComponentOption
 {
     int id = 0;
     QString name;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
     double unitPrice = 0.0;
+    int productCategoryId = 0;
+    QString productCategoryName;
 };
 
 struct OrderComponentData
@@ -83,6 +89,145 @@ struct OrderShipmentRecord
     QString note;
 };
 
+struct ProductCategoryOption
+{
+    int id = 0;
+    QString name;
+    bool isActive = true;
+};
+
+struct ProductSkuOption
+{
+    int id = 0;
+    int productCategoryId = 0;
+    QString productCategoryName;
+    QString skuName;
+    QString lampshadeName;
+    double lampshadeUnitPrice = 0.0;
+    bool isActive = true;
+};
+
+struct BaseConfigurationOption
+{
+    int id = 0;
+    int productCategoryId = 0;
+    QString configCode;
+    QString configName;
+    double configPrice = 0.0;
+    int sortOrder = 0;
+    bool isActive = true;
+};
+
+struct BaseConfigurationComponentData
+{
+    int id = 0;
+    int baseConfigurationId = 0;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    int quantity = 0;
+    double unitAmount = 0.0;
+    double lineAmount = 0.0;
+    int sortOrder = 0;
+    bool isActive = true;
+};
+
+struct StructuredOrderComponentData
+{
+    int sourceComponentId = 0;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    int quantityPerSet = 0;
+    double unitAmount = 0.0;
+    QString sourceType;
+    QString adjustmentType;
+};
+
+struct StructuredOrderSaveData
+{
+    QString orderDate;
+    QString customerName;
+    int productCategoryId = 0;
+    QString productCategoryName;
+    int productSkuId = 0;
+    QString productSkuName;
+    int baseConfigurationId = 0;
+    QString baseConfigurationName;
+    int orderQuantity = 0;
+    QString lampshadeName;
+    double lampshadeUnitPrice = 0.0;
+    double configPrice = 0.0;
+    QString remark;
+};
+
+struct InventoryItemData
+{
+    int id = 0;
+    int productCategoryId = 0;
+    QString productCategoryName;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    double unitPrice = 0.0;
+    int currentQuantity = 0;
+    QString note;
+};
+
+struct OrderMaterialDemandData
+{
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    int totalUnshippedQuantity = 0;
+};
+
+struct StructuredOrderSummary
+{
+    int id = 0;
+    QString orderDate;
+    QString customerName;
+    QString productCategoryName;
+    QString productSkuName;
+    QString baseConfigurationName;
+    int orderQuantity = 0;
+    QString lampshadeName;
+    double lampshadeUnitPrice = 0.0;
+    double configPrice = 0.0;
+    QString status;
+    int availableSetShipments = 0;
+    bool isCompleted = false;
+    bool shipmentReady = false;
+};
+
+struct StructuredOrderComponentSnapshot
+{
+    int id = 0;
+    int orderId = 0;
+    int sourceComponentId = 0;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    int quantityPerSet = 0;
+    int requiredQuantity = 0;
+    int shippedQuantity = 0;
+    int unshippedQuantity = 0;
+    double unitAmount = 0.0;
+    double lineAmount = 0.0;
+    QString sourceType;
+    QString adjustmentType;
+};
+
 class DatabaseManager
 {
 public:
@@ -111,6 +256,34 @@ public:
                                const QString &shipmentDate,
                                int shipmentQuantity,
                                const QString &note);
+    QList<ProductCategoryOption> productCategories();
+    bool saveProductCategory(const ProductCategoryOption &category);
+    QList<ProductSkuOption> productSkus(int productCategoryId = 0);
+    bool saveProductSku(const ProductSkuOption &sku);
+    QList<BaseConfigurationOption> baseConfigurationsForCategory(int productCategoryId);
+    bool saveBaseConfiguration(const BaseConfigurationOption &configuration);
+    QList<BaseConfigurationComponentData> baseConfigurationComponents(int baseConfigurationId);
+    bool replaceBaseConfigurationComponents(
+        int baseConfigurationId, const QList<BaseConfigurationComponentData> &components);
+    bool saveStructuredOrder(const StructuredOrderSaveData &orderData,
+                             const QList<StructuredOrderComponentData> &components);
+    QList<StructuredOrderSummary> structuredOrders(bool onlyOpen = false);
+    QList<StructuredOrderComponentSnapshot> structuredOrderComponents(int orderId);
+    QList<OrderShipmentRecord> structuredOrderShipments(int orderId);
+    bool saveStructuredOrderShipment(int orderId,
+                                     const QString &shipmentDate,
+                                     int shipmentSets,
+                                     const QString &note);
+    bool saveStructuredComponentShipment(int orderId,
+                                         int componentId,
+                                         const QString &shipmentDate,
+                                         int shipmentQuantity,
+                                         const QString &note);
+    QList<OrderMaterialDemandData> unshippedOrderMaterialDemands();
+    QList<InventoryItemData> inventoryItems();
+    QList<ProductComponentOption> inventoryComponentOptions(int productCategoryId = 0);
+    bool saveInventoryItem(const InventoryItemData &item);
+    bool isStructuredOrderShipmentReady(int orderId);
     QString lastError() const;
 
 private:
@@ -118,13 +291,23 @@ private:
     bool enableForeignKeys();
     bool createTables();
     bool repairShipmentData();
+    bool repairStructuredInventoryUnitPrices(QSqlDatabase &database);
     bool ensureMinimumComponentCatalogData(QSqlDatabase &database);
+    bool ensureMinimumStructuredDemoData(QSqlDatabase &database);
     bool ensureColumnExists(const QString &tableName,
                             const QString &columnName,
                             const QString &columnDefinition);
     bool executeStatement(const QString &statement);
     QList<OrderComponentData> mergedComponents(const QList<OrderComponentData> &components) const;
     int availableSetShipmentsForOrder(QSqlDatabase &database, int orderItemId, QString *errorMessage = nullptr) const;
+    int availableSetShipmentsForStructuredOrder(QSqlDatabase &database,
+                                                int orderId,
+                                                QString *errorMessage = nullptr) const;
+    bool syncStructuredOrderStatus(QSqlDatabase &database, int orderId);
+    bool deductStructuredInventory(QSqlDatabase &database,
+                                   int orderId,
+                                   const StructuredOrderComponentSnapshot &component,
+                                   int deductionQuantity);
     QString bodyComponentName(const QString &productModelName) const;
     double productDefaultPrice(QSqlDatabase &database, const QString &productModelName, QString *errorMessage = nullptr) const;
 
