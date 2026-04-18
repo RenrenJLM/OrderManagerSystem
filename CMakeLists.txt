@@ -26,6 +26,7 @@ qt_add_executable(OrderManagerSystem
     mainwindow.ui
     resources.qrc
     databasemanager.h databasemanager.cpp
+    dataimporter.h dataimporter.cpp
     ${PROJECT_DOCS}
 )
 

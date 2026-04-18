@@ -180,6 +180,15 @@ struct InventoryItemData
     QString note;
 };
 
+struct InventoryIdentityData
+{
+    int productCategoryId = 0;
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+};
+
 struct OrderMaterialDemandData
 {
     QString componentName;
@@ -284,6 +293,12 @@ public:
     QList<ProductComponentOption> inventoryComponentOptions(int productCategoryId = 0);
     bool saveInventoryItem(const InventoryItemData &item);
     bool isStructuredOrderShipmentReady(int orderId);
+    int productCategoryIdByName(const QString &categoryName);
+    int baseConfigurationIdByCategoryAndCode(int productCategoryId, const QString &configCode);
+    bool upsertProductCategoryByName(const QString &categoryName, bool isActive = true);
+    bool upsertProductSkuByNaturalKey(const ProductSkuOption &sku);
+    bool upsertBaseConfigurationByNaturalKey(const BaseConfigurationOption &configuration);
+    bool upsertInventoryItemByNaturalKey(const InventoryItemData &item);
     QString lastError() const;
 
 private:
@@ -308,6 +323,9 @@ private:
                                    int orderId,
                                    const StructuredOrderComponentSnapshot &component,
                                    int deductionQuantity);
+    int inventoryItemIdByIdentity(QSqlDatabase &database,
+                                  const InventoryIdentityData &identity,
+                                  bool *duplicateFound = nullptr);
     QString bodyComponentName(const QString &productModelName) const;
     double productDefaultPrice(QSqlDatabase &database, const QString &productModelName, QString *errorMessage = nullptr) const;
 

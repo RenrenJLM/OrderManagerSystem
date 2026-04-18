@@ -10,6 +10,7 @@
 #include <QDebug>
 #include <QDoubleSpinBox>
 #include <QEvent>
+#include <QFileDialog>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHash>
@@ -751,7 +752,7 @@ void MainWindow::setupUiState()
         {QStringLiteral("订单ID"),
          QStringLiteral("日期"),
          QStringLiteral("客户名称"),
-         QStringLiteral("产品大类型"),
+         QStringLiteral("产品类型"),
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
@@ -1364,7 +1365,7 @@ void MainWindow::setupProductDataTab()
     rootLayout->setSpacing(16);
 
     m_productDataMenuListWidget = new QListWidget(m_productDataTab);
-    m_productDataMenuListWidget->addItems({QStringLiteral("产品大类型"),
+    m_productDataMenuListWidget->addItems({QStringLiteral("产品类型"),
                                            QStringLiteral("具体型号"),
                                            QStringLiteral("基础配置价格"),
                                            QStringLiteral("基础配置 BOM")});
@@ -1376,12 +1377,12 @@ void MainWindow::setupProductDataTab()
 
     auto *categoryPage = new QWidget(m_productDataStackedWidget);
     auto *categoryPageLayout = new QVBoxLayout(categoryPage);
-    auto *categoryGroup = new QGroupBox(QStringLiteral("产品大类型维护"), categoryPage);
+    auto *categoryGroup = new QGroupBox(QStringLiteral("产品类型维护"), categoryPage);
     auto *categoryLayout = new QVBoxLayout(categoryGroup);
     m_categoryTableWidget = new QTableWidget(categoryGroup);
     m_categoryTableWidget->setColumnCount(2);
     m_categoryTableWidget->setHorizontalHeaderLabels(
-        {QStringLiteral("ID"), QStringLiteral("产品大类型")});
+        {QStringLiteral("ID"), QStringLiteral("产品类型")});
     configureTableWidget(m_categoryTableWidget);
     m_categoryTableWidget->horizontalHeader()->setSectionResizeMode(kCategoryEditorIdColumn,
                                                                     QHeaderView::ResizeToContents);
@@ -1390,10 +1391,13 @@ void MainWindow::setupProductDataTab()
     categoryLayout->addWidget(m_categoryTableWidget);
     auto *categoryButtonLayout = new QHBoxLayout();
     categoryButtonLayout->addStretch();
-    m_addCategoryButton = new QPushButton(QStringLiteral("新增大类型"), categoryGroup);
-    m_saveCategoryButton = new QPushButton(QStringLiteral("保存大类型"), categoryGroup);
+    m_importCategoriesButton = new QPushButton(QStringLiteral("导入 CSV"), categoryGroup);
+    m_addCategoryButton = new QPushButton(QStringLiteral("新增类型"), categoryGroup);
+    m_saveCategoryButton = new QPushButton(QStringLiteral("保存类型"), categoryGroup);
+    m_importCategoriesButton->setProperty("buttonRole", "secondary");
     m_addCategoryButton->setProperty("buttonRole", "secondary");
     m_saveCategoryButton->setProperty("buttonRole", "primary");
+    categoryButtonLayout->addWidget(m_importCategoriesButton);
     categoryButtonLayout->addWidget(m_addCategoryButton);
     categoryButtonLayout->addWidget(m_saveCategoryButton);
     categoryLayout->addLayout(categoryButtonLayout);
@@ -1405,7 +1409,7 @@ void MainWindow::setupProductDataTab()
     auto *skuGroup = new QGroupBox(QStringLiteral("具体型号维护"), skuPage);
     auto *skuLayout = new QVBoxLayout(skuGroup);
     auto *skuFilterLayout = new QHBoxLayout();
-    skuFilterLayout->addWidget(new QLabel(QStringLiteral("产品大类型"), skuGroup));
+    skuFilterLayout->addWidget(new QLabel(QStringLiteral("产品类型"), skuGroup));
     m_skuCategoryComboBox = new QComboBox(skuGroup);
     skuFilterLayout->addWidget(m_skuCategoryComboBox);
     skuFilterLayout->addStretch();
@@ -1425,10 +1429,13 @@ void MainWindow::setupProductDataTab()
     skuLayout->addWidget(m_skuTableWidget);
     auto *skuButtonLayout = new QHBoxLayout();
     skuButtonLayout->addStretch();
+    m_importSkusButton = new QPushButton(QStringLiteral("导入 CSV"), skuGroup);
     m_addSkuButton = new QPushButton(QStringLiteral("新增型号"), skuGroup);
     m_saveSkuButton = new QPushButton(QStringLiteral("保存型号"), skuGroup);
+    m_importSkusButton->setProperty("buttonRole", "secondary");
     m_addSkuButton->setProperty("buttonRole", "secondary");
     m_saveSkuButton->setProperty("buttonRole", "primary");
+    skuButtonLayout->addWidget(m_importSkusButton);
     skuButtonLayout->addWidget(m_addSkuButton);
     skuButtonLayout->addWidget(m_saveSkuButton);
     skuLayout->addLayout(skuButtonLayout);
@@ -1440,7 +1447,7 @@ void MainWindow::setupProductDataTab()
     auto *configGroup = new QGroupBox(QStringLiteral("基础配置价格维护"), configPage);
     auto *configLayout = new QVBoxLayout(configGroup);
     auto *configFilterLayout = new QHBoxLayout();
-    configFilterLayout->addWidget(new QLabel(QStringLiteral("产品大类型"), configGroup));
+    configFilterLayout->addWidget(new QLabel(QStringLiteral("产品类型"), configGroup));
     m_configurationCategoryComboBox = new QComboBox(configGroup);
     configFilterLayout->addWidget(m_configurationCategoryComboBox);
     configFilterLayout->addStretch();
@@ -1467,10 +1474,13 @@ void MainWindow::setupProductDataTab()
     configLayout->addWidget(m_configurationTableWidget);
     auto *configButtonLayout = new QHBoxLayout();
     configButtonLayout->addStretch();
+    m_importConfigurationsButton = new QPushButton(QStringLiteral("导入 CSV"), configGroup);
     m_addConfigurationButton = new QPushButton(QStringLiteral("新增配置"), configGroup);
     m_saveConfigurationButton = new QPushButton(QStringLiteral("保存配置"), configGroup);
+    m_importConfigurationsButton->setProperty("buttonRole", "secondary");
     m_addConfigurationButton->setProperty("buttonRole", "secondary");
     m_saveConfigurationButton->setProperty("buttonRole", "primary");
+    configButtonLayout->addWidget(m_importConfigurationsButton);
     configButtonLayout->addWidget(m_addConfigurationButton);
     configButtonLayout->addWidget(m_saveConfigurationButton);
     configLayout->addLayout(configButtonLayout);
@@ -1520,10 +1530,13 @@ void MainWindow::setupProductDataTab()
     bomLayout->addWidget(m_bomTableWidget);
     auto *bomButtonLayout = new QHBoxLayout();
     bomButtonLayout->addStretch();
+    m_importBomButton = new QPushButton(QStringLiteral("导入 CSV"), bomGroup);
     m_addBomButton = new QPushButton(QStringLiteral("新增 BOM 行"), bomGroup);
     m_saveBomButton = new QPushButton(QStringLiteral("保存 BOM"), bomGroup);
+    m_importBomButton->setProperty("buttonRole", "secondary");
     m_addBomButton->setProperty("buttonRole", "secondary");
     m_saveBomButton->setProperty("buttonRole", "primary");
+    bomButtonLayout->addWidget(m_importBomButton);
     bomButtonLayout->addWidget(m_addBomButton);
     bomButtonLayout->addWidget(m_saveBomButton);
     bomLayout->addLayout(bomButtonLayout);
@@ -1534,12 +1547,14 @@ void MainWindow::setupProductDataTab()
 
     connect(m_addCategoryButton, &QPushButton::clicked, this, &MainWindow::addCategoryEditorRow);
     connect(m_saveCategoryButton, &QPushButton::clicked, this, &MainWindow::saveCategoryEditor);
+    connect(m_importCategoriesButton, &QPushButton::clicked, this, &MainWindow::importProductCategoriesCsv);
     connect(m_skuCategoryComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
             [this](int) { loadSkuEditor(); });
     connect(m_addSkuButton, &QPushButton::clicked, this, &MainWindow::addSkuEditorRow);
     connect(m_saveSkuButton, &QPushButton::clicked, this, &MainWindow::saveSkuEditor);
+    connect(m_importSkusButton, &QPushButton::clicked, this, &MainWindow::importProductSkusCsv);
     connect(m_configurationCategoryComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
@@ -1555,12 +1570,17 @@ void MainWindow::setupProductDataTab()
             &QPushButton::clicked,
             this,
             &MainWindow::saveConfigurationEditor);
+    connect(m_importConfigurationsButton,
+            &QPushButton::clicked,
+            this,
+            &MainWindow::importBaseConfigurationsCsv);
     connect(m_bomConfigurationComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
             [this](int) { loadBomEditor(); });
     connect(m_addBomButton, &QPushButton::clicked, this, &MainWindow::addBomEditorRow);
     connect(m_saveBomButton, &QPushButton::clicked, this, &MainWindow::saveBomEditor);
+    connect(m_importBomButton, &QPushButton::clicked, this, &MainWindow::importBaseConfigurationBomCsv);
     connect(m_productDataMenuListWidget,
             &QListWidget::currentRowChanged,
             this,
@@ -1603,7 +1623,7 @@ void MainWindow::setupInventoryTab()
     auto *inventoryFormLayout = new QGridLayout();
     inventoryFormLayout->setHorizontalSpacing(16);
     inventoryFormLayout->setVerticalSpacing(12);
-    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("适用产品大类型"), inventoryGroup), 0, 0);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("适用产品类型"), inventoryGroup), 0, 0);
     m_inventoryCategoryComboBox = new QComboBox(inventoryGroup);
     inventoryFormLayout->addWidget(m_inventoryCategoryComboBox, 0, 1);
     inventoryFormLayout->addWidget(new QLabel(QStringLiteral("物料名称"), inventoryGroup), 0, 2);
@@ -1641,10 +1661,13 @@ void MainWindow::setupInventoryTab()
 
     auto *inventoryButtonLayout = new QHBoxLayout();
     inventoryButtonLayout->addStretch();
+    m_importInventoryButton = new QPushButton(QStringLiteral("导入初始库存 CSV"), inventoryGroup);
     m_clearInventoryButton = new QPushButton(QStringLiteral("清空"), inventoryGroup);
     m_saveInventoryButton = new QPushButton(QStringLiteral("保存库存"), inventoryGroup);
+    m_importInventoryButton->setProperty("buttonRole", "secondary");
     m_clearInventoryButton->setProperty("buttonRole", "secondary");
     m_saveInventoryButton->setProperty("buttonRole", "primary");
+    inventoryButtonLayout->addWidget(m_importInventoryButton);
     inventoryButtonLayout->addWidget(m_clearInventoryButton);
     inventoryButtonLayout->addWidget(m_saveInventoryButton);
     inventoryLayout->addLayout(inventoryButtonLayout);
@@ -1656,7 +1679,7 @@ void MainWindow::setupInventoryTab()
     m_inventoryTableWidget->setColumnCount(10);
     m_inventoryTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("ID"),
-         QStringLiteral("适用大类型"),
+         QStringLiteral("适用类型"),
          QStringLiteral("物料名称"),
          QStringLiteral("规格"),
          QStringLiteral("材质"),
@@ -1699,7 +1722,7 @@ void MainWindow::setupInventoryTab()
     m_inventoryBlockedOrderTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("订单ID"),
          QStringLiteral("客户"),
-         QStringLiteral("产品大类型"),
+         QStringLiteral("产品类型"),
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
@@ -1734,7 +1757,7 @@ void MainWindow::setupInventoryTab()
     m_demandSummaryTableWidget = new QTableWidget(demandGroup);
     m_demandSummaryTableWidget->setColumnCount(7);
     m_demandSummaryTableWidget->setHorizontalHeaderLabels(
-        {QStringLiteral("产品大类型"),
+        {QStringLiteral("产品类型"),
          QStringLiteral("物料名称"),
          QStringLiteral("规格"),
          QStringLiteral("材质"),
@@ -1768,7 +1791,7 @@ void MainWindow::setupInventoryTab()
     m_inventoryReadyOrderTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("订单ID"),
          QStringLiteral("客户"),
-         QStringLiteral("产品大类型"),
+         QStringLiteral("产品类型"),
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
@@ -1826,7 +1849,7 @@ void MainWindow::setupInventoryTab()
     m_structuredShipmentReadyTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("订单ID"),
          QStringLiteral("客户"),
-         QStringLiteral("产品大类型"),
+         QStringLiteral("产品类型"),
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
@@ -1867,6 +1890,7 @@ void MainWindow::setupInventoryTab()
     ui->shipmentLayout->addWidget(m_shipmentModeTabWidget);
 
     connect(m_saveInventoryButton, &QPushButton::clicked, this, &MainWindow::saveInventoryForm);
+    connect(m_importInventoryButton, &QPushButton::clicked, this, &MainWindow::importInventoryItemsCsv);
     connect(m_clearInventoryButton, &QPushButton::clicked, this, &MainWindow::clearInventoryForm);
     connect(m_inventoryTableWidget,
             &QTableWidget::itemSelectionChanged,
@@ -2629,7 +2653,7 @@ void MainWindow::saveCategoryEditor()
     loadProductDataPage();
     loadStructuredOrderSkus();
     loadStructuredQuerySkus();
-    showStatusMessage(QStringLiteral("产品大类型已保存"), 3000);
+    showStatusMessage(QStringLiteral("产品类型已保存"), 3000);
 }
 
 void MainWindow::addCategoryEditorRow()
@@ -2977,6 +3001,95 @@ void MainWindow::addBomEditorRow()
     m_bomTableWidget->setCurrentCell(row, kBomEditorNameColumn);
 }
 
+void MainWindow::importProductCategoriesCsv()
+{
+    runCsvImport(DataImporter::ImportTarget::ProductCategories,
+                 QStringLiteral("导入产品类型 CSV"),
+                 QStringLiteral("产品类型导入完成"),
+                 false);
+}
+
+void MainWindow::importProductSkusCsv()
+{
+    runCsvImport(DataImporter::ImportTarget::ProductSkus,
+                 QStringLiteral("导入具体型号 CSV"),
+                 QStringLiteral("具体型号导入完成"),
+                 false);
+}
+
+void MainWindow::importBaseConfigurationsCsv()
+{
+    runCsvImport(DataImporter::ImportTarget::BaseConfigurations,
+                 QStringLiteral("导入基础配置 CSV"),
+                 QStringLiteral("基础配置导入完成"),
+                 false);
+}
+
+void MainWindow::importBaseConfigurationBomCsv()
+{
+    runCsvImport(DataImporter::ImportTarget::BaseConfigurationBom,
+                 QStringLiteral("导入基础配置 BOM CSV"),
+                 QStringLiteral("基础配置 BOM 导入完成"),
+                 false);
+}
+
+void MainWindow::importInventoryItemsCsv()
+{
+    runCsvImport(DataImporter::ImportTarget::InventoryItems,
+                 QStringLiteral("导入初始库存 CSV"),
+                 QStringLiteral("初始库存导入完成"),
+                 true);
+}
+
+void MainWindow::runCsvImport(DataImporter::ImportTarget target,
+                              const QString &dialogTitle,
+                              const QString &successMessage,
+                              bool inventoryImport)
+{
+    const QString filePath = QFileDialog::getOpenFileName(
+        this,
+        dialogTitle,
+        QString(),
+        QStringLiteral("CSV Files (*.csv);;All Files (*.*)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    const DataImporter::ImportResult result = m_dataImporter.importCsv(target, filePath);
+    QString message = result.summaryText();
+    if (!result.failureReasons.isEmpty()) {
+        message += QStringLiteral("\n\n失败摘要：\n- ");
+        message += result.failureReasons.mid(0, 10).join(QStringLiteral("\n- "));
+    }
+
+    if (result.failedCount > 0) {
+        QMessageBox errorBox(QMessageBox::Warning,
+                             QStringLiteral("导入完成"),
+                             message,
+                             QMessageBox::Ok,
+                             this);
+        if (result.failureReasons.size() > 10) {
+            QString detailText = result.failureReasons.join(QLatin1Char('\n'));
+            errorBox.setDetailedText(detailText);
+        }
+        errorBox.exec();
+    } else {
+        QMessageBox::information(this, QStringLiteral("导入完成"), message);
+    }
+
+    loadProductDataPage();
+    loadStructuredOrderSkus();
+    loadStructuredQuerySkus();
+    rebuildStructuredOrderComponents();
+    if (inventoryImport) {
+        clearInventoryForm();
+    }
+    loadInventoryPage();
+    loadShipmentOrders();
+    performStructuredOrderQuery();
+    showStatusMessage(successMessage, 3000);
+}
+
 void MainWindow::loadStructuredQuerySkus()
 {
     if (ui->queryProductModelComboBox == nullptr) {
@@ -3147,7 +3260,7 @@ void MainWindow::loadInventoryPage()
         const int currentCategoryId = m_inventoryCategoryComboBox->currentData().toInt();
         const QSignalBlocker blocker(m_inventoryCategoryComboBox);
         m_inventoryCategoryComboBox->clear();
-        m_inventoryCategoryComboBox->addItem(QStringLiteral("选择产品大类型"), 0);
+        m_inventoryCategoryComboBox->addItem(QStringLiteral("选择产品类型"), 0);
         for (const ProductCategoryOption &category : categories) {
             m_inventoryCategoryComboBox->addItem(category.name, category.id);
         }

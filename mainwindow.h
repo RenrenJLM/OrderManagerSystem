@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 
+#include "dataimporter.h"
 #include "databasemanager.h"
 
 QT_BEGIN_NAMESPACE
@@ -85,6 +86,15 @@ private:
     void loadBomEditor();
     void saveBomEditor();
     void addBomEditorRow();
+    void importProductCategoriesCsv();
+    void importProductSkusCsv();
+    void importBaseConfigurationsCsv();
+    void importBaseConfigurationBomCsv();
+    void importInventoryItemsCsv();
+    void runCsvImport(DataImporter::ImportTarget target,
+                      const QString &dialogTitle,
+                      const QString &successMessage,
+                      bool inventoryImport);
     void loadStructuredQuerySkus();
     void performStructuredOrderQuery();
     void setStructuredQueryOrderRows(const QList<StructuredOrderSummary> &orders);
@@ -141,18 +151,22 @@ private:
     QTableWidget *m_categoryTableWidget = nullptr;
     QPushButton *m_addCategoryButton = nullptr;
     QPushButton *m_saveCategoryButton = nullptr;
+    QPushButton *m_importCategoriesButton = nullptr;
     QComboBox *m_skuCategoryComboBox = nullptr;
     QTableWidget *m_skuTableWidget = nullptr;
     QPushButton *m_addSkuButton = nullptr;
     QPushButton *m_saveSkuButton = nullptr;
+    QPushButton *m_importSkusButton = nullptr;
     QComboBox *m_configurationCategoryComboBox = nullptr;
     QTableWidget *m_configurationTableWidget = nullptr;
     QPushButton *m_addConfigurationButton = nullptr;
     QPushButton *m_saveConfigurationButton = nullptr;
+    QPushButton *m_importConfigurationsButton = nullptr;
     QComboBox *m_bomConfigurationComboBox = nullptr;
     QTableWidget *m_bomTableWidget = nullptr;
     QPushButton *m_addBomButton = nullptr;
     QPushButton *m_saveBomButton = nullptr;
+    QPushButton *m_importBomButton = nullptr;
     QComboBox *m_structuredCategoryComboBox = nullptr;
     QLineEdit *m_lampshadeNameLineEdit = nullptr;
     QLineEdit *m_orderRemarkLineEdit = nullptr;
@@ -167,6 +181,7 @@ private:
     QLineEdit *m_inventoryNoteLineEdit = nullptr;
     QPushButton *m_saveInventoryButton = nullptr;
     QPushButton *m_clearInventoryButton = nullptr;
+    QPushButton *m_importInventoryButton = nullptr;
     QTableWidget *m_inventoryTableWidget = nullptr;
     QTableWidget *m_inventoryBlockedOrderTableWidget = nullptr;
     QTableWidget *m_demandSummaryTableWidget = nullptr;
@@ -186,6 +201,7 @@ private:
     QList<ProductComponentOption> m_customComponentOptions;
     QList<ShipmentOrderSummary> m_queryOrders;
     QTimer *m_statusMessageClearTimer = nullptr;
+    DataImporter m_dataImporter{&m_databaseManager};
     bool m_updatingComponentTable = false;
     bool m_isInitializing = false;
     bool m_isShuttingDown = false;

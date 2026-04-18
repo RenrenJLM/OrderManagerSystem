@@ -838,7 +838,7 @@ QList<ProductCategoryOption> DatabaseManager::productCategories()
 bool DatabaseManager::saveProductCategory(const ProductCategoryOption &category)
 {
     if (category.name.trimmed().isEmpty()) {
-        m_lastError = QStringLiteral("产品大类型名称不能为空。");
+        m_lastError = QStringLiteral("产品类型名称不能为空。");
         return false;
     }
 
@@ -869,6 +869,38 @@ bool DatabaseManager::saveProductCategory(const ProductCategoryOption &category)
     }
 
     return true;
+}
+
+int DatabaseManager::productCategoryIdByName(const QString &categoryName)
+{
+    const QString normalizedName = categoryName.trimmed();
+    if (normalizedName.isEmpty()) {
+        return 0;
+    }
+
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral("SELECT id FROM product_categories WHERE name = ? LIMIT 1;"));
+    query.addBindValue(normalizedName);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0;
+    }
+
+    return query.next() ? query.value(0).toInt() : 0;
+}
+
+bool DatabaseManager::upsertProductCategoryByName(const QString &categoryName, bool isActive)
+{
+    ProductCategoryOption category;
+    category.id = productCategoryIdByName(categoryName);
+    category.name = categoryName.trimmed();
+    category.isActive = isActive;
+    if (category.name.isEmpty()) {
+        m_lastError = QStringLiteral("产品类型名称不能为空。");
+        return false;
+    }
+
+    return saveProductCategory(category);
 }
 
 QList<ProductSkuOption> DatabaseManager::productSkus(int productCategoryId)
@@ -914,7 +946,7 @@ QList<ProductSkuOption> DatabaseManager::productSkus(int productCategoryId)
 bool DatabaseManager::saveProductSku(const ProductSkuOption &sku)
 {
     if (sku.productCategoryId <= 0) {
-        m_lastError = QStringLiteral("请先选择所属产品大类型。");
+        m_lastError = QStringLiteral("请先选择所属产品类型。");
         return false;
     }
     if (sku.skuName.trimmed().isEmpty()) {
@@ -968,6 +1000,33 @@ bool DatabaseManager::saveProductSku(const ProductSkuOption &sku)
     return true;
 }
 
+bool DatabaseManager::upsertProductSkuByNaturalKey(const ProductSkuOption &sku)
+{
+    if (sku.productCategoryId <= 0) {
+        m_lastError = QStringLiteral("请先选择所属产品类型。");
+        return false;
+    }
+
+    ProductSkuOption normalizedSku = sku;
+    normalizedSku.skuName = sku.skuName.trimmed();
+
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT id FROM product_skus WHERE product_category_id = ? AND sku_name = ? LIMIT 1;"));
+    query.addBindValue(normalizedSku.productCategoryId);
+    query.addBindValue(normalizedSku.skuName);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+
+    if (query.next()) {
+        normalizedSku.id = query.value(0).toInt();
+    }
+
+    return saveProductSku(normalizedSku);
+}
+
 QList<BaseConfigurationOption> DatabaseManager::baseConfigurationsForCategory(int productCategoryId)
 {
     QList<BaseConfigurationOption> configurations;
@@ -1006,7 +1065,7 @@ QList<BaseConfigurationOption> DatabaseManager::baseConfigurationsForCategory(in
 bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &configuration)
 {
     if (configuration.productCategoryId <= 0) {
-        m_lastError = QStringLiteral("请先选择所属产品大类型。");
+        m_lastError = QStringLiteral("请先选择所属产品类型。");
         return false;
     }
     if (configuration.configCode.trimmed().isEmpty()) {
@@ -1060,6 +1119,42 @@ bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &confi
     }
 
     return true;
+}
+
+int DatabaseManager::baseConfigurationIdByCategoryAndCode(int productCategoryId, const QString &configCode)
+{
+    if (productCategoryId <= 0 || configCode.trimmed().isEmpty()) {
+        return 0;
+    }
+
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT id FROM base_configurations "
+        "WHERE product_category_id = ? AND config_code = ? "
+        "LIMIT 1;"));
+    query.addBindValue(productCategoryId);
+    query.addBindValue(configCode.trimmed());
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0;
+    }
+
+    return query.next() ? query.value(0).toInt() : 0;
+}
+
+bool DatabaseManager::upsertBaseConfigurationByNaturalKey(
+    const BaseConfigurationOption &configuration)
+{
+    if (configuration.productCategoryId <= 0) {
+        m_lastError = QStringLiteral("请先选择所属产品类型。");
+        return false;
+    }
+
+    BaseConfigurationOption normalizedConfiguration = configuration;
+    normalizedConfiguration.configCode = configuration.configCode.trimmed();
+    normalizedConfiguration.id = baseConfigurationIdByCategoryAndCode(
+        configuration.productCategoryId, normalizedConfiguration.configCode);
+    return saveBaseConfiguration(normalizedConfiguration);
 }
 
 QList<BaseConfigurationComponentData> DatabaseManager::baseConfigurationComponents(int baseConfigurationId)
@@ -1764,7 +1859,7 @@ QList<ProductComponentOption> DatabaseManager::inventoryComponentOptions(int pro
 bool DatabaseManager::saveInventoryItem(const InventoryItemData &item)
 {
     if (item.productCategoryId <= 0) {
-        m_lastError = QStringLiteral("请选择适用产品大类型。");
+        m_lastError = QStringLiteral("请选择适用产品类型。");
         return false;
     }
     if (item.componentName.trimmed().isEmpty()) {
@@ -1826,6 +1921,74 @@ bool DatabaseManager::saveInventoryItem(const InventoryItemData &item)
     }
 
     return true;
+}
+
+int DatabaseManager::inventoryItemIdByIdentity(QSqlDatabase &database,
+                                               const InventoryIdentityData &identity,
+                                               bool *duplicateFound)
+{
+    if (duplicateFound != nullptr) {
+        *duplicateFound = false;
+    }
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT id FROM inventory_items "
+        "WHERE product_category_id = ? "
+        "AND component_name = ? "
+        "AND COALESCE(component_spec, '') = ? "
+        "AND COALESCE(material, '') = ? "
+        "AND COALESCE(color, '') = ? "
+        "ORDER BY id ASC;"));
+    query.addBindValue(identity.productCategoryId);
+    query.addBindValue(identity.componentName.trimmed());
+    query.addBindValue(identity.componentSpec.trimmed());
+    query.addBindValue(identity.material.trimmed());
+    query.addBindValue(identity.color.trimmed());
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0;
+    }
+
+    int matchedId = 0;
+    int matchCount = 0;
+    while (query.next()) {
+        ++matchCount;
+        if (matchCount == 1) {
+            matchedId = query.value(0).toInt();
+        }
+    }
+
+    if (duplicateFound != nullptr && matchCount > 1) {
+        *duplicateFound = true;
+    }
+    return matchCount == 1 ? matchedId : 0;
+}
+
+bool DatabaseManager::upsertInventoryItemByNaturalKey(const InventoryItemData &item)
+{
+    InventoryItemData normalizedItem = item;
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    InventoryIdentityData identity;
+    identity.productCategoryId = item.productCategoryId;
+    identity.componentName = item.componentName.trimmed();
+    identity.componentSpec = item.componentSpec.trimmed();
+    identity.material = item.material.trimmed();
+    identity.color = item.color.trimmed();
+
+    bool duplicateFound = false;
+    normalizedItem.id = inventoryItemIdByIdentity(database, identity, &duplicateFound);
+    if (duplicateFound) {
+        m_lastError = QStringLiteral("库存存在重复自然键记录，无法自动覆盖：%1 / %2 / %3 / %4 / %5")
+                          .arg(QString::number(identity.productCategoryId),
+                               identity.componentName,
+                               identity.componentSpec,
+                               identity.material,
+                               identity.color);
+        return false;
+    }
+
+    return saveInventoryItem(normalizedItem);
 }
 
 bool DatabaseManager::isStructuredOrderShipmentReady(int orderId)
@@ -2478,7 +2641,7 @@ bool DatabaseManager::ensureMinimumStructuredDemoData(QSqlDatabase &database)
 
     const int feiyueCategoryId = categoryIds.value(QStringLiteral("飞月"));
     if (feiyueCategoryId <= 0) {
-        m_lastError = QStringLiteral("未找到飞月产品大类型。");
+        m_lastError = QStringLiteral("未找到飞月产品类型。");
         database.rollback();
         return false;
     }
