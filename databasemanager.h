@@ -3,6 +3,7 @@
 
 #include <QList>
 #include <QSqlDatabase>
+#include <QStringList>
 #include <QString>
 
 struct ProductModelOption
@@ -187,6 +188,7 @@ struct InventoryIdentityData
     QString componentSpec;
     QString material;
     QString color;
+    QString unitName;
 };
 
 struct OrderMaterialDemandData
@@ -267,7 +269,12 @@ class DatabaseManager
 public:
     DatabaseManager();
 
-    bool initialize();
+    bool createDatabaseFile(const QString &filePath);
+    bool openDatabaseFile(const QString &filePath);
+    void closeDatabase();
+    bool isDatabaseOpen() const;
+    QString currentDatabasePath() const;
+    QStringList validateDatabaseFile(const QString &filePath) const;
     bool ensureRequiredReferenceData();
     QList<ProductModelOption> productModels();
     QList<ProductComponentOption> productModelComponents(int productModelId);
@@ -275,8 +282,8 @@ public:
     QList<OrderComponentData> templateComponents(int templateId);
     bool saveOrder(const OrderSaveData &orderData, const QList<OrderComponentData> &components);
     QList<ShipmentOrderSummary> queryOrders(const QString &customerKeyword,
-                                           const QString &productModelName,
-                                           bool onlyUnfinished);
+                                            const QString &productModelName,
+                                            bool onlyUnfinished);
     QList<ShipmentComponentStatus> orderComponents(int orderItemId);
     QList<OrderShipmentRecord> orderShipments(int orderItemId);
     QList<ShipmentOrderSummary> shipmentOrders();
@@ -329,9 +336,16 @@ public:
     QString lastError() const;
 
 private:
-    bool openDatabase();
+    bool openDatabase(const QString &filePath);
+    bool createCurrentSchema();
     bool enableForeignKeys();
     bool createTables();
+    bool validateSchema(QSqlDatabase &database, QStringList *errors = nullptr) const;
+    bool tableHasRequiredColumns(QSqlDatabase &database,
+                                 const QString &tableName,
+                                 const QStringList &requiredColumns,
+                                 QStringList *errors) const;
+    bool requireOpenDatabase();
     bool repairShipmentData();
     bool repairStructuredInventoryUnitPrices(QSqlDatabase &database);
     bool ensureMinimumComponentCatalogData(QSqlDatabase &database);
@@ -341,7 +355,9 @@ private:
                             const QString &columnDefinition);
     bool executeStatement(const QString &statement);
     QList<OrderComponentData> mergedComponents(const QList<OrderComponentData> &components) const;
-    int availableSetShipmentsForOrder(QSqlDatabase &database, int orderItemId, QString *errorMessage = nullptr) const;
+    int availableSetShipmentsForOrder(QSqlDatabase &database,
+                                      int orderItemId,
+                                      QString *errorMessage = nullptr) const;
     int availableSetShipmentsForStructuredOrder(QSqlDatabase &database,
                                                 int orderId,
                                                 QString *errorMessage = nullptr) const;
@@ -354,9 +370,12 @@ private:
                                   const InventoryIdentityData &identity,
                                   bool *duplicateFound = nullptr);
     QString bodyComponentName(const QString &productModelName) const;
-    double productDefaultPrice(QSqlDatabase &database, const QString &productModelName, QString *errorMessage = nullptr) const;
+    double productDefaultPrice(QSqlDatabase &database,
+                               const QString &productModelName,
+                               QString *errorMessage = nullptr) const;
 
     QString m_lastError;
+    QString m_currentDatabasePath;
 };
 
 #endif // DATABASEMANAGER_H

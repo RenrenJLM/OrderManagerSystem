@@ -13,6 +13,7 @@ set(PROJECT_DOCS
     README.md
     development_log.md
     DESIGN.md
+    TEST_CHECKLIST.md
 )
 
 # ADDED: mark docs as non-compilable files, only for IDE display

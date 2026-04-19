@@ -73,6 +73,8 @@ CMakeLists.txt.user*
 # --------
 *.dll
 *.exe
+*.db
+*.sqlite
 
 # Directories with generated files
 .moc/

@@ -1,9 +1,7 @@
-#include "databasemanager.h"
 #include "mainwindow.h"
 
 #include <QApplication>
 #include <QLocale>
-#include <QMessageBox>
 #include <QTranslator>
 
 #include <memory>
@@ -11,6 +9,7 @@
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    a.setOrganizationName(QStringLiteral("OrderManagerSystem"));
     a.setApplicationName(QStringLiteral("订单管理系统"));
 
     QTranslator translator;
@@ -21,14 +20,6 @@ int main(int argc, char *argv[])
             a.installTranslator(&translator);
             break;
         }
-    }
-
-    DatabaseManager databaseManager;
-    if (!databaseManager.initialize()) {
-        QMessageBox::critical(nullptr,
-                              QStringLiteral("数据库初始化失败"),
-                              databaseManager.lastError());
-        return 1;
     }
 
     auto window = std::make_unique<MainWindow>();

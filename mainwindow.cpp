@@ -6,12 +6,14 @@
 #include <QAction>
 #include <QComboBox>
 #include <QCompleter>
+#include <QCalendarWidget>
 #include <QDate>
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFile>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHash>
@@ -26,6 +28,7 @@
 #include <QPushButton>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QSettings>
 #include <QStringConverter>
 #include <QSet>
 #include <QSignalBlocker>
@@ -71,6 +74,24 @@ QTableWidgetItem *createIdTableWidgetItem(int value)
     auto *item = new NumericTableWidgetItem(value);
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
     return item;
+}
+
+void configurePreferredColumn(QTableWidget *tableWidget,
+                              int column,
+                              int width,
+                              QHeaderView::ResizeMode resizeMode = QHeaderView::Interactive)
+{
+    if (tableWidget == nullptr || tableWidget->horizontalHeader() == nullptr) {
+        return;
+    }
+
+    tableWidget->horizontalHeader()->setSectionResizeMode(column, resizeMode);
+    tableWidget->setColumnWidth(column, width);
+}
+
+void configureFixedIdColumn(QTableWidget *tableWidget, int column, int width = 96)
+{
+    configurePreferredColumn(tableWidget, column, width, QHeaderView::Interactive);
 }
 
 void applyDefaultAscendingSort(QTableWidget *tableWidget, int column)
@@ -329,22 +350,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_statusMessageClearTimer = new QTimer(this);
     m_statusMessageClearTimer->setSingleShot(true);
 
-    if (!m_databaseManager.ensureRequiredReferenceData()) {
-        QMessageBox::critical(this,
-                              QStringLiteral("基础数据初始化失败"),
-                              m_databaseManager.lastError());
-    }
-
     setupUiState();
     setupProductDataTab();
     setupInventoryTab();
     setupStructuredOrderUi();
-    loadProductDataPage();
-    loadInventoryPage();
-    loadStructuredOrderSkus();
-    loadStructuredQuerySkus();
-    performStructuredOrderQuery();
-    loadShipmentOrders();
+    ui->mainTabWidget->setCurrentWidget(ui->orderEntryTab);
+    clearAllDatabaseViews();
+    applyDatabaseOpenState(false);
+    restoreLastDatabase();
 
     connect(m_structuredCategoryComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
@@ -445,9 +458,7 @@ MainWindow::MainWindow(QWidget *parent)
                 showStatusMessage(QStringLiteral("订单已保存"), 3000);
                 clearStructuredOrderForm();
                 loadStructuredQuerySkus();
-                loadInventoryPage();
-                loadShipmentOrders();
-                performStructuredOrderQuery();
+                refreshStructuredOperationalViews(true);
             });
     connect(ui->querySearchButton, &QPushButton::clicked, this, &MainWindow::performStructuredOrderQuery);
     if (m_exportOrderSummaryButton != nullptr) {
@@ -532,10 +543,7 @@ MainWindow::MainWindow(QWidget *parent)
                 }
 
                 ui->shipmentOrderNoteLineEdit->clear();
-                loadShipmentOrders();
-                loadInventoryPage();
-                refreshShipmentReadyTables();
-                performStructuredOrderQuery();
+                refreshStructuredOperationalViews(true);
                 showStatusMessage(QStringLiteral("订单发货已保存"), 3000);
             });
     connect(ui->saveComponentShipmentButton,
@@ -557,10 +565,7 @@ MainWindow::MainWindow(QWidget *parent)
                 }
 
                 ui->componentShipmentNoteLineEdit->clear();
-                loadShipmentOrders();
-                loadInventoryPage();
-                refreshShipmentReadyTables();
-                performStructuredOrderQuery();
+                refreshStructuredOperationalViews(true);
                 showStatusMessage(QStringLiteral("组件发货已保存"), 3000);
             });
     connect(m_structuredShipmentReadyTableWidget,
@@ -672,6 +677,7 @@ void MainWindow::setupUiState()
     ui->queryFilterLayout->setVerticalSpacing(8);
 
     ui->orderDateEdit->setDate(QDate::currentDate());
+    configureDateEditCalendar(ui->orderDateEdit);
     ui->quantitySetsSpinBox->setMinimum(1);
     ui->quantitySetsSpinBox->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
     ui->bodyUnitPriceDoubleSpinBox->setMinimum(0.0);
@@ -685,6 +691,7 @@ void MainWindow::setupUiState()
     ui->unitPriceDoubleSpinBox->setReadOnly(true);
     ui->unitPriceDoubleSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->shipmentDateEdit->setDate(QDate::currentDate());
+    configureDateEditCalendar(ui->shipmentDateEdit);
     ui->shipmentSetsSpinBox->setMinimum(0);
     ui->shipmentSetsSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui->componentShipmentQuantitySpinBox->setMinimum(0);
@@ -693,7 +700,9 @@ void MainWindow::setupUiState()
     ui->shipmentOrderStatusValueLabel->setWordWrap(true);
     ui->selectedComponentValueLabel->setWordWrap(true);
     ui->windowTitleLabel->setProperty("titleRole", "title");
+    ui->databaseStatusLabel->setProperty("labelRole", "statusMessage");
     ui->statusMessageLabel->setProperty("labelRole", "statusMessage");
+    ui->databaseStatusLabel->hide();
     ui->minimizeWindowButton->setText(QStringLiteral("−"));
 
     ui->saveOrderButton->setProperty("buttonRole", "primary");
@@ -741,24 +750,15 @@ void MainWindow::setupUiState()
     ui->componentTableWidget->horizontalHeader()->setStretchLastSection(false);
     ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentNameColumn,
                                                                        QHeaderView::Stretch);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentSpecColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentMaterialColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentColorColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kComponentUnitColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kQuantityPerSetColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kUnitPriceColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kSourceTypeColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(kTotalRequiredColumn,
-                                                                       QHeaderView::ResizeToContents);
-    ui->componentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kComponentTotalPriceColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->componentTableWidget, kComponentSpecColumn, 150);
+    configurePreferredColumn(ui->componentTableWidget, kComponentMaterialColumn, 108);
+    configurePreferredColumn(ui->componentTableWidget, kComponentColorColumn, 96);
+    configurePreferredColumn(ui->componentTableWidget, kComponentUnitColumn, 76);
+    configurePreferredColumn(ui->componentTableWidget, kQuantityPerSetColumn, 92);
+    configurePreferredColumn(ui->componentTableWidget, kUnitPriceColumn, 96);
+    configurePreferredColumn(ui->componentTableWidget, kSourceTypeColumn, 92);
+    configurePreferredColumn(ui->componentTableWidget, kTotalRequiredColumn, 96);
+    configurePreferredColumn(ui->componentTableWidget, kComponentTotalPriceColumn, 104);
     configureTableWidget(ui->componentTableWidget);
     ui->componentTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->componentTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -779,16 +779,17 @@ void MainWindow::setupUiState()
     ui->shipmentComponentTableWidget->horizontalHeader()->setStretchLastSection(false);
     ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
         kShipmentComponentNameColumn, QHeaderView::Stretch);
-    ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kShipmentComponentQuantityPerSetColumn, QHeaderView::ResizeToContents);
-    ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kShipmentComponentUnitPriceColumn, QHeaderView::ResizeToContents);
-    ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kShipmentComponentTotalRequiredColumn, QHeaderView::ResizeToContents);
-    ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kShipmentComponentUnshippedColumn, QHeaderView::ResizeToContents);
-    ui->shipmentComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kShipmentComponentSourceColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->shipmentComponentTableWidget,
+                             kShipmentComponentQuantityPerSetColumn,
+                             92);
+    configurePreferredColumn(ui->shipmentComponentTableWidget, kShipmentComponentUnitPriceColumn, 96);
+    configurePreferredColumn(ui->shipmentComponentTableWidget,
+                             kShipmentComponentTotalRequiredColumn,
+                             96);
+    configurePreferredColumn(ui->shipmentComponentTableWidget, kShipmentComponentShippedColumn, 96);
+    configurePreferredColumn(ui->shipmentComponentTableWidget, kShipmentComponentUnshippedColumn, 96);
+    configurePreferredColumn(ui->shipmentComponentTableWidget, kShipmentComponentTotalPriceColumn, 104);
+    configurePreferredColumn(ui->shipmentComponentTableWidget, kShipmentComponentSourceColumn, 92);
     configureTableWidget(ui->shipmentComponentTableWidget);
 
     ui->orderListTableWidget->setColumnCount(10);
@@ -807,26 +808,18 @@ void MainWindow::setupUiState()
     ui->orderListTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     ui->orderListTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
     ui->orderListTableWidget->horizontalHeader()->setStretchLastSection(false);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderIdColumn, QHeaderView::ResizeToContents);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderDateColumn, QHeaderView::ResizeToContents);
+    configureFixedIdColumn(ui->orderListTableWidget, kQueryOrderIdColumn, 104);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderDateColumn, 118);
     ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryOrderCustomerColumn, QHeaderView::Stretch);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderCategoryColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderCategoryColumn, 112);
     ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryOrderProductModelColumn, QHeaderView::Stretch);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderConfigurationColumn, QHeaderView::ResizeToContents);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderQuantitySetsColumn, QHeaderView::ResizeToContents);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderUnitPriceColumn, QHeaderView::ResizeToContents);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderStatusColumn, QHeaderView::ResizeToContents);
-    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryOrderShipmentReadyColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderConfigurationColumn, 112);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderQuantitySetsColumn, 88);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderUnitPriceColumn, 96);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderStatusColumn, 104);
+    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderShipmentReadyColumn, 96);
     configureTableWidget(ui->orderListTableWidget);
 
     ui->orderDetailComponentTableWidget->setColumnCount(8);
@@ -845,20 +838,13 @@ void MainWindow::setupUiState()
     ui->orderDetailComponentTableWidget->horizontalHeader()->setStretchLastSection(false);
     ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
         kQueryDetailComponentNameColumn, QHeaderView::Stretch);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailComponentSpecColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailComponentMaterialColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailComponentColorColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailQuantityPerSetColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailTotalRequiredColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailUnitPriceColumn, QHeaderView::ResizeToContents);
-    ui->orderDetailComponentTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryDetailSourceColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailComponentSpecColumn, 150);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailComponentMaterialColumn, 108);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailComponentColorColumn, 96);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailQuantityPerSetColumn, 92);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailTotalRequiredColumn, 96);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailUnitPriceColumn, 96);
+    configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailSourceColumn, 118);
     configureTableWidget(ui->orderDetailComponentTableWidget);
 
     ui->orderShipmentHistoryTableWidget->setColumnCount(4);
@@ -871,12 +857,9 @@ void MainWindow::setupUiState()
     ui->orderShipmentHistoryTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     ui->orderShipmentHistoryTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
     ui->orderShipmentHistoryTableWidget->horizontalHeader()->setStretchLastSection(true);
-    ui->orderShipmentHistoryTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryShipmentDateColumn, QHeaderView::ResizeToContents);
-    ui->orderShipmentHistoryTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryShipmentTypeColumn, QHeaderView::ResizeToContents);
-    ui->orderShipmentHistoryTableWidget->horizontalHeader()->setSectionResizeMode(
-        kQueryShipmentQuantityColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentDateColumn, 136);
+    configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentTypeColumn, 112);
+    configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentQuantityColumn, 88);
     configureTableWidget(ui->orderShipmentHistoryTableWidget);
 
     ui->orderDetailSplitter->setOrientation(Qt::Vertical);
@@ -918,9 +901,8 @@ void MainWindow::setupUiState()
     setupCustomTitleBar();
     applyUiTheme();
     connect(m_statusMessageClearTimer, &QTimer::timeout, this, [this]() {
-        if (ui != nullptr && ui->statusMessageLabel != nullptr) {
-            ui->statusMessageLabel->clear();
-        }
+        m_hasTransientStatusMessage = false;
+        refreshStatusMessageLabel();
     });
     enableComboBoxFiltering(ui->productModelComboBox);
     enableComboBoxFiltering(ui->templateComboBox);
@@ -980,16 +962,35 @@ void MainWindow::setupCustomTitleBar()
     updateWindowControlButtons();
 }
 
+void MainWindow::configureDateEditCalendar(QDateEdit *dateEdit) const
+{
+    if (dateEdit == nullptr) {
+        return;
+    }
+
+    dateEdit->setCalendarPopup(true);
+    QCalendarWidget *calendarWidget = dateEdit->calendarWidget();
+    if (calendarWidget == nullptr) {
+        return;
+    }
+
+    calendarWidget->setGridVisible(false);
+    calendarWidget->setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);
+    calendarWidget->setHorizontalHeaderFormat(QCalendarWidget::ShortDayNames);
+}
+
 void MainWindow::setupTopMenus()
 {
     auto *fileMenu = new QMenu(this);
+    fileMenu->addAction(QStringLiteral("新建数据库..."), this, &MainWindow::createDatabase);
+    fileMenu->addAction(QStringLiteral("打开数据库..."), this, &MainWindow::openDatabase);
+    fileMenu->addAction(QStringLiteral("关闭当前数据库"), this, &MainWindow::closeCurrentDatabase);
+    fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("刷新界面"), this, [this]() {
-        loadProductDataPage();
-        loadInventoryPage();
-        loadStructuredOrderSkus();
-        loadStructuredQuerySkus();
-        loadShipmentOrders();
-        performStructuredOrderQuery();
+        if (!ensureDatabaseOpenForAction(QStringLiteral("刷新界面"))) {
+            return;
+        }
+        refreshAllDatabaseViews();
         showStatusMessage(QStringLiteral("界面数据已刷新"), 3000);
     });
     fileMenu->addSeparator();
@@ -1010,12 +1011,10 @@ void MainWindow::setupTopMenus()
 
     auto *toolsMenu = new QMenu(this);
     toolsMenu->addAction(QStringLiteral("重新加载基础数据"), this, [this]() {
-        loadProductDataPage();
-        loadInventoryPage();
-        loadStructuredOrderSkus();
-        loadStructuredQuerySkus();
-        loadShipmentOrders();
-        performStructuredOrderQuery();
+        if (!ensureDatabaseOpenForAction(QStringLiteral("重新加载基础数据"))) {
+            return;
+        }
+        refreshAllDatabaseViews();
         showStatusMessage(QStringLiteral("基础数据已重新加载"), 3000);
     });
     toolsMenu->addAction(QStringLiteral("界面样式说明"), this, [this]() {
@@ -1037,6 +1036,398 @@ void MainWindow::setupTopMenus()
                                  QStringLiteral("OrderManagerSystem\nQt Widgets 桌面订单管理系统"));
     });
     ui->helpMenuButton->setMenu(helpMenu);
+}
+
+void MainWindow::restoreLastDatabase()
+{
+    QSettings settings;
+    const QString lastDatabasePath =
+        settings.value(QStringLiteral("database/last_opened_path")).toString().trimmed();
+
+    if (lastDatabasePath.isEmpty()) {
+        updateDatabaseStatusDisplay();
+        showStatusMessage(QStringLiteral("当前未打开数据库，请先新建或打开数据库。"), 5000);
+        return;
+    }
+
+    if (!m_databaseManager.openDatabaseFile(lastDatabasePath)) {
+        settings.remove(QStringLiteral("database/last_opened_path"));
+        updateDatabaseStatusDisplay();
+        applyDatabaseOpenState(false);
+        clearAllDatabaseViews();
+        QMessageBox::warning(this,
+                             QStringLiteral("打开数据库失败"),
+                             QStringLiteral("无法打开上次使用的数据库。\n%1")
+                                 .arg(m_databaseManager.lastError()));
+        showStatusMessage(QStringLiteral("当前未打开数据库，请先新建或打开数据库。"), 5000);
+        return;
+    }
+
+    refreshAllDatabaseViews();
+    applyDatabaseOpenState(true);
+    updateDatabaseStatusDisplay();
+    showStatusMessage(QStringLiteral("已打开上次使用的数据库"), 3000);
+}
+
+bool MainWindow::ensureDatabaseOpenForAction(const QString &actionName)
+{
+    if (m_databaseManager.isDatabaseOpen()) {
+        return true;
+    }
+
+    QMessageBox::warning(this,
+                         actionName,
+                         QStringLiteral("当前未打开数据库，无法执行该操作。"));
+    showStatusMessage(QStringLiteral("当前未打开数据库，请先新建或打开数据库。"), 5000);
+    return false;
+}
+
+QString MainWindow::currentDatabaseStatusText() const
+{
+    if (!m_databaseManager.isDatabaseOpen()) {
+        return QStringLiteral("当前数据库：未打开");
+    }
+
+    return QStringLiteral("当前数据库：%1")
+        .arg(QFileInfo(m_databaseManager.currentDatabasePath()).absoluteFilePath());
+}
+
+void MainWindow::refreshStatusMessageLabel()
+{
+    if (ui == nullptr || ui->statusMessageLabel == nullptr) {
+        return;
+    }
+
+    if (!m_hasTransientStatusMessage) {
+        ui->statusMessageLabel->setText(currentDatabaseStatusText());
+    }
+}
+
+void MainWindow::createDatabase()
+{
+    const QString filePath = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("新建数据库"),
+        QString(),
+        QStringLiteral("SQLite 数据库 (*.db *.sqlite);;所有文件 (*.*)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    if (!m_databaseManager.createDatabaseFile(filePath)) {
+        QMessageBox::critical(this,
+                              QStringLiteral("新建数据库失败"),
+                              m_databaseManager.lastError());
+        return;
+    }
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("database/last_opened_path"),
+                      m_databaseManager.currentDatabasePath());
+    refreshAllDatabaseViews();
+    applyDatabaseOpenState(true);
+    updateDatabaseStatusDisplay();
+    showStatusMessage(QStringLiteral("新数据库已创建并打开"), 3000);
+}
+
+void MainWindow::openDatabase()
+{
+    const QString filePath = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("打开数据库"),
+        QString(),
+        QStringLiteral("SQLite 数据库 (*.db *.sqlite);;所有文件 (*.*)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    if (!m_databaseManager.openDatabaseFile(filePath)) {
+        QMessageBox::critical(this,
+                              QStringLiteral("打开数据库失败"),
+                              m_databaseManager.lastError());
+        return;
+    }
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("database/last_opened_path"),
+                      m_databaseManager.currentDatabasePath());
+    refreshAllDatabaseViews();
+    applyDatabaseOpenState(true);
+    updateDatabaseStatusDisplay();
+    showStatusMessage(QStringLiteral("数据库已打开"), 3000);
+}
+
+void MainWindow::closeCurrentDatabase()
+{
+    if (!m_databaseManager.isDatabaseOpen()) {
+        clearAllDatabaseViews();
+        applyDatabaseOpenState(false);
+        updateDatabaseStatusDisplay();
+        showStatusMessage(QStringLiteral("当前未打开数据库，请先新建或打开数据库。"), 3000);
+        return;
+    }
+
+    m_databaseManager.closeDatabase();
+    QSettings settings;
+    settings.remove(QStringLiteral("database/last_opened_path"));
+    clearAllDatabaseViews();
+    applyDatabaseOpenState(false);
+    updateDatabaseStatusDisplay();
+    showStatusMessage(QStringLiteral("当前数据库已关闭"), 3000);
+}
+
+void MainWindow::refreshAllDatabaseViews()
+{
+    if (!m_databaseManager.isDatabaseOpen()) {
+        clearAllDatabaseViews();
+        applyDatabaseOpenState(false);
+        updateDatabaseStatusDisplay();
+        return;
+    }
+
+    m_isDatabaseUiUpdating = true;
+    loadProductDataPage();
+    loadInventoryPage();
+    loadStructuredOrderSkus();
+    loadStructuredQuerySkus();
+    rebuildStructuredOrderComponents();
+    loadShipmentOrders();
+    performStructuredOrderQuery();
+    m_isDatabaseUiUpdating = false;
+    applyDatabaseOpenState(true);
+    updateDatabaseStatusDisplay();
+}
+
+void MainWindow::clearAllDatabaseViews()
+{
+    m_isDatabaseUiUpdating = true;
+    m_structuredQuerySkus.clear();
+    m_structuredQueryOrders.clear();
+    m_filteredStructuredQueryOrders.clear();
+    m_structuredShipmentReadyOrders.clear();
+    m_inventoryBlockedOrders.clear();
+    m_shipmentOrders.clear();
+    m_shipmentComponents.clear();
+    m_inventoryDemandSummaryRows.clear();
+
+    if (m_categoryTableWidget != nullptr) {
+        m_categoryTableWidget->setRowCount(0);
+    }
+    if (m_skuTableWidget != nullptr) {
+        m_skuTableWidget->setRowCount(0);
+    }
+    if (m_configurationTableWidget != nullptr) {
+        m_configurationTableWidget->setRowCount(0);
+    }
+    if (m_bomTableWidget != nullptr) {
+        m_bomTableWidget->setRowCount(0);
+    }
+    if (m_skuCategoryComboBox != nullptr) {
+        m_skuCategoryComboBox->clear();
+    }
+    if (m_configurationCategoryComboBox != nullptr) {
+        m_configurationCategoryComboBox->clear();
+    }
+    if (m_bomConfigurationComboBox != nullptr) {
+        m_bomConfigurationComboBox->clear();
+    }
+    if (m_structuredCategoryComboBox != nullptr) {
+        m_structuredCategoryComboBox->clear();
+    }
+    if (ui->productModelComboBox != nullptr) {
+        ui->productModelComboBox->clear();
+    }
+    if (ui->templateComboBox != nullptr) {
+        ui->templateComboBox->clear();
+    }
+    if (ui->componentTableWidget != nullptr) {
+        ui->componentTableWidget->setRowCount(0);
+    }
+    if (ui->queryProductModelComboBox != nullptr) {
+        ui->queryProductModelComboBox->clear();
+        ui->queryProductModelComboBox->addItem(QStringLiteral("全部型号"), 0);
+    }
+    if (ui->queryCustomerLineEdit != nullptr) {
+        ui->queryCustomerLineEdit->clear();
+    }
+    if (ui->queryOnlyUnfinishedCheckBox != nullptr) {
+        ui->queryOnlyUnfinishedCheckBox->setChecked(false);
+    }
+    if (ui->queryOrderCountValueLabel != nullptr) {
+        ui->queryOrderCountValueLabel->setText(QStringLiteral("0"));
+    }
+    if (ui->shipmentOrderComboBox != nullptr) {
+        ui->shipmentOrderComboBox->clear();
+    }
+    if (ui->shipmentComponentTableWidget != nullptr) {
+        ui->shipmentComponentTableWidget->setRowCount(0);
+    }
+
+    clearStructuredOrderForm();
+    clearInventoryForm();
+    refreshInventoryList();
+    refreshInventoryDemandPage();
+    clearQueryDetails();
+    setStructuredQueryOrderRows({});
+    setShipmentComponentRows({});
+    if (ui->shipmentOrderStatusValueLabel != nullptr) {
+        ui->shipmentOrderStatusValueLabel->setText(QStringLiteral("当前未打开数据库"));
+    }
+    if (ui->selectedComponentValueLabel != nullptr) {
+        ui->selectedComponentValueLabel->setText(QStringLiteral("当前未打开数据库"));
+    }
+    if (m_structuredShipmentReadyLabel != nullptr) {
+        m_structuredShipmentReadyLabel->setText(QStringLiteral("当前未打开数据库"));
+    }
+    m_isDatabaseUiUpdating = false;
+}
+
+void MainWindow::applyDatabaseOpenState(bool isOpen)
+{
+    if (ui == nullptr) {
+        return;
+    }
+
+    ui->mainTabWidget->setEnabled(true);
+    ui->saveOrderButton->setEnabled(isOpen);
+    ui->saveOrderShipmentButton->setEnabled(isOpen);
+    ui->saveComponentShipmentButton->setEnabled(isOpen);
+    ui->querySearchButton->setEnabled(isOpen);
+    ui->queryResetButton->setEnabled(isOpen);
+    ui->productModelComboBox->setEnabled(isOpen);
+    ui->templateComboBox->setEnabled(isOpen);
+    ui->quantitySetsSpinBox->setEnabled(isOpen);
+    ui->customerNameLineEdit->setEnabled(isOpen);
+    ui->orderDateEdit->setEnabled(isOpen);
+    ui->shipmentOrderComboBox->setEnabled(isOpen);
+    ui->shipmentDateEdit->setEnabled(isOpen);
+    ui->shipmentSetsSpinBox->setEnabled(isOpen);
+    ui->shipmentOrderNoteLineEdit->setEnabled(isOpen);
+    ui->shipmentComponentTableWidget->setEnabled(isOpen);
+    ui->componentShipmentQuantitySpinBox->setEnabled(isOpen);
+    ui->componentShipmentNoteLineEdit->setEnabled(isOpen);
+    ui->queryCustomerLineEdit->setEnabled(isOpen);
+    ui->queryProductModelComboBox->setEnabled(isOpen);
+    ui->queryOnlyUnfinishedCheckBox->setEnabled(isOpen);
+    ui->orderListTableWidget->setEnabled(isOpen);
+    ui->orderDetailComponentTableWidget->setEnabled(isOpen);
+    ui->orderShipmentHistoryTableWidget->setEnabled(isOpen);
+    ui->addComponentButton->setEnabled(isOpen);
+    ui->removeComponentButton->setEnabled(isOpen);
+
+    if (m_addCategoryButton != nullptr) {
+        m_addCategoryButton->setEnabled(isOpen);
+    }
+    if (m_saveCategoryButton != nullptr) {
+        m_saveCategoryButton->setEnabled(isOpen);
+    }
+    if (m_importCategoriesButton != nullptr) {
+        m_importCategoriesButton->setEnabled(isOpen);
+    }
+    if (m_skuCategoryComboBox != nullptr) {
+        m_skuCategoryComboBox->setEnabled(isOpen);
+    }
+    if (m_addSkuButton != nullptr) {
+        m_addSkuButton->setEnabled(isOpen);
+    }
+    if (m_saveSkuButton != nullptr) {
+        m_saveSkuButton->setEnabled(isOpen);
+    }
+    if (m_importSkusButton != nullptr) {
+        m_importSkusButton->setEnabled(isOpen);
+    }
+    if (m_configurationCategoryComboBox != nullptr) {
+        m_configurationCategoryComboBox->setEnabled(isOpen);
+    }
+    if (m_addConfigurationButton != nullptr) {
+        m_addConfigurationButton->setEnabled(isOpen);
+    }
+    if (m_saveConfigurationButton != nullptr) {
+        m_saveConfigurationButton->setEnabled(isOpen);
+    }
+    if (m_importConfigurationsButton != nullptr) {
+        m_importConfigurationsButton->setEnabled(isOpen);
+    }
+    if (m_bomConfigurationComboBox != nullptr) {
+        m_bomConfigurationComboBox->setEnabled(isOpen);
+    }
+    if (m_addBomButton != nullptr) {
+        m_addBomButton->setEnabled(isOpen);
+    }
+    if (m_saveBomButton != nullptr) {
+        m_saveBomButton->setEnabled(isOpen);
+    }
+    if (m_importBomButton != nullptr) {
+        m_importBomButton->setEnabled(isOpen);
+    }
+    if (m_inventoryCategoryComboBox != nullptr) {
+        m_inventoryCategoryComboBox->setEnabled(isOpen);
+    }
+    if (m_inventoryComponentComboBox != nullptr) {
+        m_inventoryComponentComboBox->setEnabled(isOpen);
+    }
+    if (m_inventoryComponentSpecLineEdit != nullptr) {
+        m_inventoryComponentSpecLineEdit->setEnabled(isOpen);
+    }
+    if (m_inventoryMaterialLineEdit != nullptr) {
+        m_inventoryMaterialLineEdit->setEnabled(isOpen);
+    }
+    if (m_inventoryColorLineEdit != nullptr) {
+        m_inventoryColorLineEdit->setEnabled(isOpen);
+    }
+    if (m_inventoryUnitLineEdit != nullptr) {
+        m_inventoryUnitLineEdit->setEnabled(isOpen);
+    }
+    if (m_inventoryUnitPriceSpinBox != nullptr) {
+        m_inventoryUnitPriceSpinBox->setEnabled(isOpen);
+    }
+    if (m_inventoryQuantitySpinBox != nullptr) {
+        m_inventoryQuantitySpinBox->setEnabled(isOpen);
+    }
+    if (m_inventoryNoteLineEdit != nullptr) {
+        m_inventoryNoteLineEdit->setEnabled(isOpen);
+    }
+    if (m_saveInventoryButton != nullptr) {
+        m_saveInventoryButton->setEnabled(isOpen);
+    }
+    if (m_clearInventoryButton != nullptr) {
+        m_clearInventoryButton->setEnabled(isOpen);
+    }
+    if (m_importInventoryButton != nullptr) {
+        m_importInventoryButton->setEnabled(isOpen);
+    }
+    if (m_inventoryTableWidget != nullptr) {
+        m_inventoryTableWidget->setEnabled(isOpen);
+    }
+    if (m_inventoryBlockedOrderTableWidget != nullptr) {
+        m_inventoryBlockedOrderTableWidget->setEnabled(isOpen);
+    }
+    if (m_demandSummaryTableWidget != nullptr) {
+        m_demandSummaryTableWidget->setEnabled(isOpen);
+    }
+    if (m_inventoryReadyOrderTableWidget != nullptr) {
+        m_inventoryReadyOrderTableWidget->setEnabled(isOpen);
+    }
+    if (m_inventoryDemandScopeComboBox != nullptr) {
+        m_inventoryDemandScopeComboBox->setEnabled(isOpen);
+    }
+    if (m_exportOrderSummaryButton != nullptr) {
+        m_exportOrderSummaryButton->setEnabled(isOpen);
+    }
+    if (m_exportInventoryDemandButton != nullptr) {
+        m_exportInventoryDemandButton->setEnabled(isOpen);
+    }
+    if (m_exportShipmentListButton != nullptr) {
+        m_exportShipmentListButton->setEnabled(isOpen);
+    }
+    if (m_printCurrentOrderButton != nullptr) {
+        m_printCurrentOrderButton->setEnabled(isOpen);
+    }
+}
+
+void MainWindow::updateDatabaseStatusDisplay()
+{
+    refreshStatusMessageLabel();
 }
 
 void MainWindow::toggleMaximizeRestore()
@@ -1233,6 +1624,51 @@ void MainWindow::applyUiTheme()
         "  border: 1px solid #d8e0ea;"
         "  selection-background-color: #e8f0ff;"
         "}"
+        "QCalendarWidget {"
+        "  background: #ffffff;"
+        "  color: #1f2937;"
+        "  border: 1px solid #d8e0ea;"
+        "  border-radius: 4px;"
+        "}"
+        "QCalendarWidget QWidget#qt_calendar_navigationbar {"
+        "  background: #f7f9fc;"
+        "  border-bottom: 1px solid #d8e0ea;"
+        "}"
+        "QCalendarWidget QToolButton {"
+        "  min-height: 28px;"
+        "  min-width: 28px;"
+        "  margin: 4px;"
+        "  padding: 0 8px;"
+        "  border: 1px solid transparent;"
+        "  border-radius: 4px;"
+        "  background: transparent;"
+        "  color: #334155;"
+        "}"
+        "QCalendarWidget QToolButton:hover {"
+        "  background: #eef3f8;"
+        "  border-color: #d7deea;"
+        "}"
+        "QCalendarWidget QSpinBox {"
+        "  min-height: 28px;"
+        "  margin: 4px 0;"
+        "  padding: 0 8px;"
+        "  background: #ffffff;"
+        "  border: 1px solid #d8e0ea;"
+        "  border-radius: 4px;"
+        "  color: #1f2937;"
+        "}"
+        "QCalendarWidget QMenu {"
+        "  background: #ffffff;"
+        "  border: 1px solid #d7deea;"
+        "}"
+        "QCalendarWidget QAbstractItemView:enabled {"
+        "  background: #ffffff;"
+        "  color: #334155;"
+        "  border: none;"
+        "  outline: 0;"
+        "  selection-background-color: #dbeafe;"
+        "  selection-color: #1e3a8a;"
+        "}"
         "QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QDateEdit:focus {"
         "  border: 1px solid #4f7cff;"
         "  background: #ffffff;"
@@ -1367,9 +1803,14 @@ void MainWindow::showStatusMessage(const QString &message, int timeoutMs)
     }
 
     m_statusMessageClearTimer->stop();
-    ui->statusMessageLabel->setText(message);
+    m_hasTransientStatusMessage = !message.trimmed().isEmpty();
+    if (m_hasTransientStatusMessage) {
+        ui->statusMessageLabel->setText(message);
+    } else {
+        refreshStatusMessageLabel();
+    }
 
-    if (timeoutMs > 0) {
+    if (m_hasTransientStatusMessage && timeoutMs > 0) {
         m_statusMessageClearTimer->start(timeoutMs);
     }
 }
@@ -1428,8 +1869,7 @@ void MainWindow::setupProductDataTab()
     m_categoryTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("ID"), QStringLiteral("产品类型")});
     configureTableWidget(m_categoryTableWidget);
-    m_categoryTableWidget->horizontalHeader()->setSectionResizeMode(kCategoryEditorIdColumn,
-                                                                    QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_categoryTableWidget, kCategoryEditorIdColumn, 88);
     m_categoryTableWidget->horizontalHeader()->setSectionResizeMode(kCategoryEditorNameColumn,
                                                                     QHeaderView::Stretch);
     categoryLayout->addWidget(m_categoryTableWidget);
@@ -1463,8 +1903,7 @@ void MainWindow::setupProductDataTab()
     m_skuTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("ID"), QStringLiteral("具体型号"), QStringLiteral("默认灯罩"), QStringLiteral("灯罩单价")});
     configureTableWidget(m_skuTableWidget);
-    m_skuTableWidget->horizontalHeader()->setSectionResizeMode(kSkuEditorIdColumn,
-                                                               QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_skuTableWidget, kSkuEditorIdColumn, 88);
     m_skuTableWidget->horizontalHeader()->setSectionResizeMode(kSkuEditorNameColumn, QHeaderView::Stretch);
     m_skuTableWidget->horizontalHeader()->setSectionResizeMode(kSkuEditorLampshadeColumn,
                                                                QHeaderView::Stretch);
@@ -1505,16 +1944,12 @@ void MainWindow::setupProductDataTab()
          QStringLiteral("配置价格"),
          QStringLiteral("排序")});
     configureTableWidget(m_configurationTableWidget);
-    m_configurationTableWidget->horizontalHeader()->setSectionResizeMode(
-        kConfigurationEditorIdColumn, QHeaderView::ResizeToContents);
-    m_configurationTableWidget->horizontalHeader()->setSectionResizeMode(
-        kConfigurationEditorCodeColumn, QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_configurationTableWidget, kConfigurationEditorIdColumn, 88);
+    configurePreferredColumn(m_configurationTableWidget, kConfigurationEditorCodeColumn, 92);
     m_configurationTableWidget->horizontalHeader()->setSectionResizeMode(
         kConfigurationEditorNameColumn, QHeaderView::Stretch);
-    m_configurationTableWidget->horizontalHeader()->setSectionResizeMode(
-        kConfigurationEditorPriceColumn, QHeaderView::ResizeToContents);
-    m_configurationTableWidget->horizontalHeader()->setSectionResizeMode(
-        kConfigurationEditorSortColumn, QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_configurationTableWidget, kConfigurationEditorPriceColumn, 96);
+    configurePreferredColumn(m_configurationTableWidget, kConfigurationEditorSortColumn, 88);
     configLayout->addWidget(m_configurationTableWidget);
     auto *configButtonLayout = new QHBoxLayout();
     configButtonLayout->addStretch();
@@ -1554,23 +1989,15 @@ void MainWindow::setupProductDataTab()
          QStringLiteral("单价"),
          QStringLiteral("排序")});
     configureTableWidget(m_bomTableWidget);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorIdColumn,
-                                                               QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_bomTableWidget, kBomEditorIdColumn, 88);
     m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorNameColumn, QHeaderView::Stretch);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorSpecColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorMaterialColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorColorColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorUnitColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorQuantityColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorUnitPriceColumn,
-                                                               QHeaderView::ResizeToContents);
-    m_bomTableWidget->horizontalHeader()->setSectionResizeMode(kBomEditorSortColumn,
-                                                               QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorSpecColumn, 150);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorMaterialColumn, 108);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorColorColumn, 96);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorUnitColumn, 76);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorQuantityColumn, 92);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorUnitPriceColumn, 96);
+    configurePreferredColumn(m_bomTableWidget, kBomEditorSortColumn, 88);
     bomLayout->addWidget(m_bomTableWidget);
     auto *bomButtonLayout = new QHBoxLayout();
     bomButtonLayout->addStretch();
@@ -1653,14 +2080,14 @@ void MainWindow::setupInventoryTab()
     auto *inventoryEntryPageLayout = new QVBoxLayout(inventoryEntryPage);
     inventoryEntryPageLayout->setContentsMargins(0, 0, 0, 0);
     inventoryEntryPageLayout->setSpacing(16);
-    auto *inventoryListPage = new QWidget(m_inventoryModeTabWidget);
-    auto *inventoryListPageLayout = new QVBoxLayout(inventoryListPage);
-    inventoryListPageLayout->setContentsMargins(0, 0, 0, 0);
-    inventoryListPageLayout->setSpacing(16);
     auto *inventoryDemandPage = new QWidget(m_inventoryModeTabWidget);
     auto *inventoryDemandPageLayout = new QVBoxLayout(inventoryDemandPage);
     inventoryDemandPageLayout->setContentsMargins(0, 0, 0, 0);
     inventoryDemandPageLayout->setSpacing(16);
+    auto *inventoryOrderInfoPage = new QWidget(m_inventoryModeTabWidget);
+    auto *inventoryOrderInfoPageLayout = new QVBoxLayout(inventoryOrderInfoPage);
+    inventoryOrderInfoPageLayout->setContentsMargins(0, 0, 0, 0);
+    inventoryOrderInfoPageLayout->setSpacing(16);
 
     auto *inventoryGroup = new QGroupBox(QStringLiteral("库存录入"), m_inventoryTab);
     auto *inventoryLayout = new QVBoxLayout(inventoryGroup);
@@ -1736,30 +2163,22 @@ void MainWindow::setupInventoryTab()
     m_inventoryTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_inventoryTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListIdColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListCategoryColumn,
-                                                                     QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_inventoryTableWidget, kInventoryListIdColumn, 88);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListCategoryColumn, 112);
     m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListNameColumn,
                                                                      QHeaderView::Stretch);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListSpecColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListMaterialColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListColorColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListUnitColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListUnitPriceColumn,
-                                                                     QHeaderView::ResizeToContents);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListQuantityColumn,
-                                                                     QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListSpecColumn, 150);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListMaterialColumn, 108);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListColorColumn, 96);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListUnitColumn, 76);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListUnitPriceColumn, 96);
+    configurePreferredColumn(m_inventoryTableWidget, kInventoryListQuantityColumn, 88);
     m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListNoteColumn,
                                                                      QHeaderView::Stretch);
     inventoryListLayout->addWidget(m_inventoryTableWidget);
-    inventoryListPageLayout->addWidget(inventoryListGroup);
+    inventoryEntryPageLayout->addWidget(inventoryListGroup);
 
-    auto *blockedOrderGroup = new QGroupBox(QStringLiteral("不可发货订单"), inventoryDemandPage);
+    auto *blockedOrderGroup = new QGroupBox(QStringLiteral("缺货订单"), inventoryOrderInfoPage);
     auto *blockedOrderLayout = new QVBoxLayout(blockedOrderGroup);
     m_inventoryBlockedOrderTableWidget = new QTableWidget(blockedOrderGroup);
     m_inventoryBlockedOrderTableWidget->setColumnCount(7);
@@ -1775,23 +2194,18 @@ void MainWindow::setupInventoryTab()
     m_inventoryBlockedOrderTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryBlockedOrderTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_inventoryBlockedOrderTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderIdColumn,
-                                                                                 QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderIdColumn, 104);
     m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCustomerColumn,
                                                                                  QHeaderView::Stretch);
-    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCategoryColumn,
-                                                                                 QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderCategoryColumn, 112);
     m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderSkuColumn,
                                                                                  QHeaderView::Stretch);
-    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderConfigurationColumn,
-                                                                                 QHeaderView::ResizeToContents);
-    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderQuantityColumn,
-                                                                                 QHeaderView::ResizeToContents);
-    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderStatusColumn,
-                                                                                 QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderConfigurationColumn, 112);
+    configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderQuantityColumn, 88);
+    configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderStatusColumn, 96);
     blockedOrderLayout->addWidget(m_inventoryBlockedOrderTableWidget);
 
-    auto *demandGroup = new QGroupBox(QStringLiteral("库存需求汇总"), inventoryDemandPage);
+    auto *demandGroup = new QGroupBox(QStringLiteral("订单汇总需求"), inventoryDemandPage);
     auto *demandLayout = new QVBoxLayout(demandGroup);
     auto *demandScopeLayout = new QHBoxLayout();
     demandScopeLayout->addWidget(new QLabel(QStringLiteral("查看范围"), demandGroup));
@@ -1818,27 +2232,19 @@ void MainWindow::setupInventoryTab()
     m_demandSummaryTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_demandSummaryTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_demandSummaryTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryCategoryColumn,
-                                                                         QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryCategoryColumn, 112);
     m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryNameColumn,
                                                                          QHeaderView::Stretch);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummarySpecColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryMaterialColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryColorColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryUnitColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryDemandColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryInventoryColumn,
-                                                                         QHeaderView::ResizeToContents);
-    m_demandSummaryTableWidget->horizontalHeader()->setSectionResizeMode(kDemandSummaryGapColumn,
-                                                                         QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummarySpecColumn, 150);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryMaterialColumn, 108);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryColorColumn, 96);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryUnitColumn, 76);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryDemandColumn, 96);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryInventoryColumn, 96);
+    configurePreferredColumn(m_demandSummaryTableWidget, kDemandSummaryGapColumn, 96);
     demandLayout->addWidget(m_demandSummaryTableWidget);
 
-    auto *readyOrderGroup = new QGroupBox(QStringLiteral("可发货订单"), inventoryListPage);
+    auto *readyOrderGroup = new QGroupBox(QStringLiteral("可发货订单"), inventoryOrderInfoPage);
     auto *readyOrderLayout = new QVBoxLayout(readyOrderGroup);
     m_inventoryReadyOrderTableWidget = new QTableWidget(readyOrderGroup);
     m_inventoryReadyOrderTableWidget->setColumnCount(7);
@@ -1854,29 +2260,28 @@ void MainWindow::setupInventoryTab()
     m_inventoryReadyOrderTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryReadyOrderTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_inventoryReadyOrderTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderIdColumn,
-                                                                               QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_inventoryReadyOrderTableWidget, kReadyOrderIdColumn, 104);
     m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCustomerColumn,
                                                                                QHeaderView::Stretch);
-    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCategoryColumn,
-                                                                               QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderCategoryColumn, 112);
     m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderSkuColumn,
                                                                                QHeaderView::Stretch);
-    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderConfigurationColumn,
-                                                                               QHeaderView::ResizeToContents);
-    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderQuantityColumn,
-                                                                               QHeaderView::ResizeToContents);
-    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderStatusColumn,
-                                                                               QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderConfigurationColumn, 112);
+    configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderQuantityColumn, 88);
+    configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderStatusColumn, 96);
     readyOrderLayout->addWidget(m_inventoryReadyOrderTableWidget);
 
-    inventoryDemandPageLayout->addWidget(blockedOrderGroup);
     inventoryDemandPageLayout->addWidget(demandGroup);
-    inventoryListPageLayout->addWidget(readyOrderGroup);
+    inventoryOrderInfoPageLayout->addWidget(blockedOrderGroup);
+    inventoryOrderInfoPageLayout->addWidget(readyOrderGroup);
+    inventoryEntryPageLayout->setStretch(0, 0);
+    inventoryEntryPageLayout->setStretch(1, 1);
+    inventoryOrderInfoPageLayout->setStretch(0, 1);
+    inventoryOrderInfoPageLayout->setStretch(1, 1);
 
     m_inventoryModeTabWidget->addTab(inventoryEntryPage, QStringLiteral("库存录入"));
-    m_inventoryModeTabWidget->addTab(inventoryListPage, QStringLiteral("库存列表"));
     m_inventoryModeTabWidget->addTab(inventoryDemandPage, QStringLiteral("库存需求"));
+    m_inventoryModeTabWidget->addTab(inventoryOrderInfoPage, QStringLiteral("订单信息"));
     rootLayout->addWidget(m_inventoryModeTabWidget);
 
     ui->mainTabWidget->insertTab(2, m_inventoryTab, QStringLiteral("库存管理"));
@@ -1914,20 +2319,15 @@ void MainWindow::setupInventoryTab()
     m_structuredShipmentReadyTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_structuredShipmentReadyTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_structuredShipmentReadyTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderIdColumn,
-                                                                                   QHeaderView::ResizeToContents);
+    configureFixedIdColumn(m_structuredShipmentReadyTableWidget, kReadyOrderIdColumn, 104);
     m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCustomerColumn,
                                                                                    QHeaderView::Stretch);
-    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderCategoryColumn,
-                                                                                   QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderCategoryColumn, 112);
     m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderSkuColumn,
                                                                                    QHeaderView::Stretch);
-    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderConfigurationColumn,
-                                                                                   QHeaderView::ResizeToContents);
-    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderQuantityColumn,
-                                                                                   QHeaderView::ResizeToContents);
-    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(kReadyOrderStatusColumn,
-                                                                                   QHeaderView::ResizeToContents);
+    configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderConfigurationColumn, 112);
+    configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderQuantityColumn, 88);
+    configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderStatusColumn, 96);
     structuredShipmentReadyLayout->addWidget(m_structuredShipmentReadyTableWidget);
 
     if (ui->shipmentLayout != nullptr) {
@@ -2248,6 +2648,22 @@ void MainWindow::loadStructuredOrderSkus()
         return;
     }
 
+    if (!m_databaseManager.isDatabaseOpen()) {
+        const QSignalBlocker categoryBlocker(m_structuredCategoryComboBox);
+        const QSignalBlocker skuBlocker(ui->productModelComboBox);
+        const QSignalBlocker configBlocker(ui->templateComboBox);
+        m_structuredCategoryComboBox->clear();
+        ui->productModelComboBox->clear();
+        ui->templateComboBox->clear();
+        if (m_lampshadeNameLineEdit != nullptr) {
+            m_lampshadeNameLineEdit->clear();
+        }
+        if (ui->componentTableWidget != nullptr) {
+            ui->componentTableWidget->setRowCount(0);
+        }
+        return;
+    }
+
     const QList<ProductCategoryOption> categories = m_databaseManager.productCategories();
     const int previousCategoryId = m_structuredCategoryComboBox->currentData().toInt();
     {
@@ -2281,6 +2697,14 @@ void MainWindow::loadStructuredOrderSkus()
 
 void MainWindow::loadBaseConfigurationsForCurrentSku()
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        if (m_lampshadeNameLineEdit != nullptr) {
+            m_lampshadeNameLineEdit->clear();
+        }
+        ui->templateComboBox->clear();
+        return;
+    }
+
     const int skuId = ui->productModelComboBox->currentData().toInt();
     ProductSkuOption currentSku;
     for (const ProductSkuOption &sku : m_databaseManager.productSkus()) {
@@ -2322,6 +2746,11 @@ void MainWindow::loadBaseConfigurationsForCurrentSku()
 
 void MainWindow::rebuildStructuredOrderComponents()
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        setStructuredComponentTableRows({});
+        return;
+    }
+
     const int configurationId = ui->templateComboBox->currentData().toInt();
     ProductSkuOption currentSku;
     const int skuId = ui->productModelComboBox->currentData().toInt();
@@ -2523,6 +2952,27 @@ void MainWindow::addStructuredComponentRow()
                             ui->componentTableWidget->item(row, kComponentNameColumn)) {
                         nameItem->setText(componentComboBox->currentText().section('|', 0, 0).trimmed());
                         nameItem->setData(Qt::UserRole, 0);
+                        nameItem->setData(Qt::UserRole + 1, QStringLiteral("extra"));
+                    }
+                    if (QTableWidgetItem *specItem =
+                            ui->componentTableWidget->item(row, kComponentSpecColumn)) {
+                        specItem->setText(QString());
+                    }
+                    if (QTableWidgetItem *materialItem =
+                            ui->componentTableWidget->item(row, kComponentMaterialColumn)) {
+                        materialItem->setText(QString());
+                    }
+                    if (QTableWidgetItem *colorItem =
+                            ui->componentTableWidget->item(row, kComponentColorColumn)) {
+                        colorItem->setText(QString());
+                    }
+                    if (QTableWidgetItem *unitItem =
+                            ui->componentTableWidget->item(row, kComponentUnitColumn)) {
+                        unitItem->setText(QStringLiteral("件"));
+                    }
+                    if (QTableWidgetItem *priceItem =
+                            ui->componentTableWidget->item(row, kUnitPriceColumn)) {
+                        priceItem->setText(QString::number(kDefaultNonZeroUnitPrice, 'f', 2));
                     }
                     updateStructuredComponentTotals();
                     return;
@@ -2627,6 +3077,10 @@ void MainWindow::clearStructuredOrderForm()
 
 bool MainWindow::validateStructuredOrderInput(QString *errorMessage) const
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        *errorMessage = QStringLiteral("当前未打开数据库。");
+        return false;
+    }
     if (ui->customerNameLineEdit->text().trimmed().isEmpty()) {
         *errorMessage = QStringLiteral("客户名称不能为空。");
         return false;
@@ -3108,6 +3562,10 @@ void MainWindow::runCsvImport(DataImporter::ImportTarget target,
                               const QString &successMessage,
                               bool inventoryImport)
 {
+    if (!ensureDatabaseOpenForAction(dialogTitle)) {
+        return;
+    }
+
     const QString filePath = QFileDialog::getOpenFileName(
         this,
         dialogTitle,
@@ -3146,9 +3604,7 @@ void MainWindow::runCsvImport(DataImporter::ImportTarget target,
     if (inventoryImport) {
         clearInventoryForm();
     }
-    loadInventoryPage();
-    loadShipmentOrders();
-    performStructuredOrderQuery();
+    refreshStructuredOperationalViews(true);
     showStatusMessage(successMessage, 3000);
 }
 
@@ -3159,17 +3615,17 @@ void MainWindow::setupQueryOutputControls()
     }
 
     m_queryStartDateEdit = new QDateEdit(ui->queryGroupBox);
-    m_queryStartDateEdit->setCalendarPopup(true);
     m_queryStartDateEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd"));
     m_queryStartDateEdit->setDate(QDate::currentDate().addMonths(-1));
+    configureDateEditCalendar(m_queryStartDateEdit);
 
     m_queryEndDateEdit = new QDateEdit(ui->queryGroupBox);
-    m_queryEndDateEdit->setCalendarPopup(true);
     m_queryEndDateEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd"));
     m_queryEndDateEdit->setDate(QDate::currentDate());
+    configureDateEditCalendar(m_queryEndDateEdit);
 
-    m_exportOrderSummaryButton = new QPushButton(QStringLiteral("导出订单汇总 CSV"), ui->queryGroupBox);
-    m_exportShipmentListButton = new QPushButton(QStringLiteral("导出发货清单 CSV"), ui->queryGroupBox);
+    m_exportOrderSummaryButton = new QPushButton(QStringLiteral("导出订单汇总信息"), ui->queryGroupBox);
+    m_exportShipmentListButton = new QPushButton(QStringLiteral("导出发货清单"), ui->queryGroupBox);
     m_printCurrentOrderButton = new QPushButton(QStringLiteral("打印当前订单"), ui->queryGroupBox);
     m_exportOrderSummaryButton->setProperty("buttonRole", "secondary");
     m_exportShipmentListButton->setProperty("buttonRole", "secondary");
@@ -3201,6 +3657,14 @@ void MainWindow::loadStructuredQuerySkus()
         return;
     }
 
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_structuredQuerySkus.clear();
+        const QSignalBlocker blocker(ui->queryProductModelComboBox);
+        ui->queryProductModelComboBox->clear();
+        ui->queryProductModelComboBox->addItem(QStringLiteral("全部型号"), 0);
+        return;
+    }
+
     m_structuredQuerySkus = m_databaseManager.productSkus();
     const QSignalBlocker blocker(ui->queryProductModelComboBox);
     ui->queryProductModelComboBox->clear();
@@ -3212,6 +3676,13 @@ void MainWindow::loadStructuredQuerySkus()
 
 void MainWindow::performStructuredOrderQuery()
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_structuredQueryOrders.clear();
+        m_filteredStructuredQueryOrders.clear();
+        setStructuredQueryOrderRows({});
+        return;
+    }
+
     if (m_queryModeTabWidget != nullptr) {
         m_queryModeTabWidget->setCurrentIndex(0);
     }
@@ -3416,6 +3887,10 @@ bool MainWindow::writeCsvFile(const QString &dialogTitle,
 
 void MainWindow::exportOrderSummaryCsv()
 {
+    if (!ensureDatabaseOpenForAction(QStringLiteral("导出订单汇总"))) {
+        return;
+    }
+
     QList<QStringList> rows;
     for (const StructuredOrderSummary &order : m_filteredStructuredQueryOrders) {
         rows.append({QString::number(order.id),
@@ -3447,6 +3922,10 @@ void MainWindow::exportOrderSummaryCsv()
 
 void MainWindow::exportInventoryDemandCsv()
 {
+    if (!ensureDatabaseOpenForAction(QStringLiteral("导出库存需求汇总"))) {
+        return;
+    }
+
     QList<QStringList> rows;
     for (const InventoryDemandSummaryRow &row : m_inventoryDemandSummaryRows) {
         rows.append({row.productCategoryName,
@@ -3478,6 +3957,10 @@ void MainWindow::exportInventoryDemandCsv()
 
 void MainWindow::exportCurrentOrderShipmentCsv()
 {
+    if (!ensureDatabaseOpenForAction(QStringLiteral("导出发货清单"))) {
+        return;
+    }
+
     const int orderId = currentQueryOrderId();
     if (orderId <= 0) {
         QMessageBox::warning(this, QStringLiteral("导出失败"), QStringLiteral("请先在订单查询中选择一个订单。"));
@@ -3574,6 +4057,10 @@ QString MainWindow::buildPrintableOrderText(int orderId)
 
 void MainWindow::printCurrentOrder()
 {
+    if (!ensureDatabaseOpenForAction(QStringLiteral("打印订单"))) {
+        return;
+    }
+
     const int orderId = currentQueryOrderId();
     if (orderId <= 0) {
         QMessageBox::warning(this, QStringLiteral("打印失败"), QStringLiteral("请先在订单查询中选择一个订单。"));
@@ -3601,6 +4088,24 @@ void MainWindow::printCurrentOrder()
 
 void MainWindow::loadInventoryPage()
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        refreshInventoryList();
+        if (m_inventoryDemandScopeComboBox != nullptr) {
+            m_inventoryDemandScopeComboBox->clear();
+            m_inventoryDemandScopeComboBox->addItem(QStringLiteral("全部未发订单需求汇总"), 0);
+        }
+        if (m_inventoryBlockedOrderTableWidget != nullptr) {
+            m_inventoryBlockedOrderTableWidget->setRowCount(0);
+        }
+        if (m_demandSummaryTableWidget != nullptr) {
+            m_demandSummaryTableWidget->setRowCount(0);
+        }
+        if (m_inventoryReadyOrderTableWidget != nullptr) {
+            m_inventoryReadyOrderTableWidget->setRowCount(0);
+        }
+        return;
+    }
+
     if (m_inventoryCategoryComboBox != nullptr) {
         const QList<ProductCategoryOption> categories = m_databaseManager.productCategories();
         const int currentCategoryId = m_inventoryCategoryComboBox->currentData().toInt();
@@ -3730,6 +4235,10 @@ void MainWindow::saveInventoryForm()
         return;
     }
 
+    if (!ensureDatabaseOpenForAction(QStringLiteral("保存库存"))) {
+        return;
+    }
+
     InventoryItemData item;
     item.id = currentInventoryItemId();
     item.productCategoryId =
@@ -3757,10 +4266,8 @@ void MainWindow::saveInventoryForm()
     }
 
     clearInventoryForm();
-    loadInventoryPage();
     loadStructuredQuerySkus();
-    loadShipmentOrders();
-    performStructuredOrderQuery();
+    refreshStructuredOperationalViews(true);
     showStatusMessage(QStringLiteral("库存已保存"), 3000);
 }
 
@@ -3773,6 +4280,10 @@ void MainWindow::refreshInventoryList()
     m_inventoryTableWidget->setSortingEnabled(false);
     const QSignalBlocker blocker(m_inventoryTableWidget);
     m_inventoryTableWidget->setRowCount(0);
+    if (!m_databaseManager.isDatabaseOpen()) {
+        return;
+    }
+
     for (const InventoryItemData &item : m_databaseManager.inventoryItems()) {
         const int row = m_inventoryTableWidget->rowCount();
         m_inventoryTableWidget->insertRow(row);
@@ -3895,6 +4406,13 @@ void MainWindow::refreshInventoryDemandShortageTable()
         return;
     }
 
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_inventoryDemandSummaryRows.clear();
+        const QSignalBlocker blocker(m_demandSummaryTableWidget);
+        m_demandSummaryTableWidget->setRowCount(0);
+        return;
+    }
+
     QList<InventoryDemandSummaryRow> rows;
     const int scopeOrderId = currentInventoryDemandOrderId();
     if (scopeOrderId <= 0) {
@@ -3986,6 +4504,20 @@ void MainWindow::refreshInventoryDemandShortageTable()
 
 void MainWindow::refreshShipmentReadyTables()
 {
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_structuredShipmentReadyOrders.clear();
+        auto clearTable = [](QTableWidget *tableWidget) {
+            if (tableWidget != nullptr) {
+                tableWidget->setRowCount(0);
+            }
+        };
+        clearTable(m_inventoryReadyOrderTableWidget);
+        clearTable(m_structuredShipmentReadyTableWidget);
+        refreshInventoryDemandPage();
+        refreshStructuredShipmentReadySummary();
+        return;
+    }
+
     const QList<StructuredOrderSummary> orders = m_databaseManager.structuredOrders(true);
     m_structuredShipmentReadyOrders = orders;
 
@@ -4037,6 +4569,11 @@ void MainWindow::refreshStructuredShipmentReadySummary()
         return;
     }
 
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_structuredShipmentReadyLabel->setText(QStringLiteral("当前未打开数据库"));
+        return;
+    }
+
     int readyCount = 0;
     int blockedCount = 0;
     for (const StructuredOrderSummary &order : m_structuredShipmentReadyOrders) {
@@ -4051,6 +4588,17 @@ void MainWindow::refreshStructuredShipmentReadySummary()
         QStringLiteral("当前订单中，可发货 %1 单，不可发货 %2 单。")
             .arg(readyCount)
             .arg(blockedCount));
+}
+
+void MainWindow::refreshStructuredOperationalViews(bool reloadInventoryPage)
+{
+    if (reloadInventoryPage) {
+        loadInventoryPage();
+    } else {
+        refreshShipmentReadyTables();
+    }
+    loadShipmentOrders();
+    performStructuredOrderQuery();
 }
 
 int MainWindow::currentStructuredShipmentOrderId() const
@@ -4175,584 +4723,6 @@ int MainWindow::currentInventoryDemandOrderId() const
     return m_inventoryDemandScopeComboBox->currentData().toInt();
 }
 
-void MainWindow::loadProductModels()
-{
-    m_updatingComponentTable = true;
-    const QSignalBlocker blocker(ui->productModelComboBox);
-    ui->productModelComboBox->clear();
-
-    const QList<ProductModelOption> models = m_databaseManager.productModels();
-    for (const ProductModelOption &model : models) {
-        ui->productModelComboBox->addItem(model.name, model.id);
-        ui->productModelComboBox->setItemData(ui->productModelComboBox->count() - 1,
-                                              model.defaultPrice,
-                                              Qt::UserRole + 1);
-    }
-
-    if (ui->productModelComboBox->count() == 0) {
-        showStatusMessage(QStringLiteral("没有可用的具体型号数据"), 5000);
-    }
-
-    m_updatingComponentTable = false;
-    loadCustomComponentOptions();
-    loadTemplatesForCurrentProduct();
-}
-
-void MainWindow::loadCustomComponentOptions()
-{
-    m_customComponentOptions.clear();
-    if (m_isShuttingDown || ui == nullptr || ui->productModelComboBox == nullptr) {
-        return;
-    }
-
-    const int productModelId = ui->productModelComboBox->currentData().toInt();
-    if (productModelId <= 0) {
-        return;
-    }
-
-    m_customComponentOptions = m_databaseManager.productModelComponents(productModelId);
-}
-
-void MainWindow::loadTemplatesForCurrentProduct()
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    const int productModelId = ui->productModelComboBox->currentData().toInt();
-    ui->bodyUnitPriceDoubleSpinBox->setValue(
-        ui->productModelComboBox->currentData(Qt::UserRole + 1).toDouble());
-    loadCustomComponentOptions();
-
-    {
-        const QSignalBlocker blocker(ui->templateComboBox);
-        ui->templateComboBox->clear();
-
-        if (productModelId > 0) {
-            const QList<TemplateOption> templates =
-                m_databaseManager.optionTemplatesForProduct(productModelId);
-            for (const TemplateOption &option : templates) {
-                ui->templateComboBox->addItem(option.name, option.id);
-            }
-        }
-    }
-
-    if (ui->customConfigurationRadioButton->isChecked()) {
-        setComponentTableRows({}, true);
-        if (!m_customComponentOptions.isEmpty()) {
-            addEmptyComponentRow();
-        } else {
-            showStatusMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
-        }
-        updatePriceDisplays();
-        return;
-    }
-
-    loadSelectedTemplateComponents();
-}
-
-void MainWindow::loadSelectedTemplateComponents()
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    const int templateId = ui->templateComboBox->currentData().toInt();
-    if (templateId <= 0) {
-        setComponentTableRows({}, false);
-        if (ui->templateConfigurationRadioButton->isChecked()) {
-            showStatusMessage(QStringLiteral("当前产品没有可用模板"), 5000);
-        }
-        return;
-    }
-
-    setComponentTableRows(m_databaseManager.templateComponents(templateId), false);
-}
-
-void MainWindow::setCustomConfigurationMode(bool enabled)
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    ui->templateComboBox->setEnabled(!enabled);
-    ui->addComponentButton->setEnabled(enabled);
-    ui->removeComponentButton->setEnabled(enabled);
-
-    if (enabled) {
-        setComponentTableRows({}, true);
-        if (!m_customComponentOptions.isEmpty()) {
-            addEmptyComponentRow();
-        } else {
-            showStatusMessage(QStringLiteral("当前产品没有可选组件数据"), 5000);
-        }
-    } else {
-        loadSelectedTemplateComponents();
-    }
-
-    updatePriceDisplays();
-}
-
-void MainWindow::setComponentTableRows(const QList<OrderComponentData> &components,
-                                       bool editableNamesAndQty)
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    m_updatingComponentTable = true;
-    const QSignalBlocker blocker(ui->componentTableWidget);
-    ui->componentTableWidget->setRowCount(0);
-
-    for (const OrderComponentData &component : components) {
-        const int row = ui->componentTableWidget->rowCount();
-        ui->componentTableWidget->insertRow(row);
-
-        auto *nameItem = new QTableWidgetItem(component.componentName);
-        auto *quantityItem =
-            new QTableWidgetItem(component.quantityPerSet > 0
-                                     ? QString::number(component.quantityPerSet)
-                                     : QString());
-        auto *unitPriceItem = new QTableWidgetItem(
-            component.unitPrice > 0.0 ? QString::number(component.unitPrice, 'f', 2) : QString());
-        auto *sourceItem =
-            new QTableWidgetItem(component.sourceType == QStringLiteral("template")
-                                     ? QStringLiteral("模板")
-                                     : QStringLiteral("手动"));
-        auto *totalItem = new QTableWidgetItem(QString());
-        auto *totalPriceItem = new QTableWidgetItem(QString());
-
-        if (!editableNamesAndQty) {
-            nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
-            quantityItem->setFlags(quantityItem->flags() & ~Qt::ItemIsEditable);
-            if (component.sourceType != QStringLiteral("template")) {
-                unitPriceItem->setFlags(unitPriceItem->flags() & ~Qt::ItemIsEditable);
-            }
-        }
-        sourceItem->setFlags(sourceItem->flags() & ~Qt::ItemIsEditable);
-        totalItem->setFlags(totalItem->flags() & ~Qt::ItemIsEditable);
-        totalPriceItem->setFlags(totalPriceItem->flags() & ~Qt::ItemIsEditable);
-
-        ui->componentTableWidget->setItem(row, kComponentNameColumn, nameItem);
-        ui->componentTableWidget->setItem(row, kQuantityPerSetColumn, quantityItem);
-        ui->componentTableWidget->setItem(row, kUnitPriceColumn, unitPriceItem);
-        ui->componentTableWidget->setItem(row, kSourceTypeColumn, sourceItem);
-        ui->componentTableWidget->setItem(row, kTotalRequiredColumn, totalItem);
-        ui->componentTableWidget->setItem(row, kComponentTotalPriceColumn, totalPriceItem);
-    }
-
-    m_updatingComponentTable = false;
-    updateComponentTotals();
-}
-
-void MainWindow::addEmptyComponentRow()
-{
-    if (m_isShuttingDown || !ui->customConfigurationRadioButton->isChecked()) {
-        return;
-    }
-
-    m_updatingComponentTable = true;
-    const QSignalBlocker blocker(ui->componentTableWidget);
-    const int row = ui->componentTableWidget->rowCount();
-    ui->componentTableWidget->insertRow(row);
-
-    auto *componentComboBox = new QComboBox(ui->componentTableWidget);
-    for (const ProductComponentOption &option : m_customComponentOptions) {
-        componentComboBox->addItem(option.name, option.id);
-        componentComboBox->setItemData(componentComboBox->count() - 1,
-                                       option.unitPrice,
-                                       Qt::UserRole + 1);
-    }
-    auto *quantityItem = new QTableWidgetItem(QStringLiteral("1"));
-    auto *unitPriceItem = new QTableWidgetItem(QString());
-    auto *sourceItem = new QTableWidgetItem(QStringLiteral("手动"));
-    auto *totalItem = new QTableWidgetItem(QString());
-    auto *totalPriceItem = new QTableWidgetItem(QString());
-
-    sourceItem->setFlags(sourceItem->flags() & ~Qt::ItemIsEditable);
-    totalItem->setFlags(totalItem->flags() & ~Qt::ItemIsEditable);
-    totalPriceItem->setFlags(totalPriceItem->flags() & ~Qt::ItemIsEditable);
-
-    ui->componentTableWidget->setCellWidget(row, kComponentNameColumn, componentComboBox);
-    ui->componentTableWidget->setItem(row, kQuantityPerSetColumn, quantityItem);
-    ui->componentTableWidget->setItem(row, kUnitPriceColumn, unitPriceItem);
-    ui->componentTableWidget->setItem(row, kSourceTypeColumn, sourceItem);
-    ui->componentTableWidget->setItem(row, kTotalRequiredColumn, totalItem);
-    ui->componentTableWidget->setItem(row, kComponentTotalPriceColumn, totalPriceItem);
-
-    connect(componentComboBox,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            [this, componentComboBox](int) {
-                if (m_isShuttingDown || ui == nullptr || ui->componentTableWidget == nullptr) {
-                    return;
-                }
-                const int row = customComponentRowForWidget(componentComboBox);
-                if (row >= 0) {
-                    updateCustomComponentRow(row);
-                }
-            });
-
-    m_updatingComponentTable = false;
-    updateCustomComponentRow(row);
-    updateComponentTotals();
-    ui->componentTableWidget->setCurrentCell(row, kQuantityPerSetColumn);
-}
-
-void MainWindow::updateCustomComponentRow(int row)
-{
-    if (m_isShuttingDown || ui == nullptr || ui->componentTableWidget == nullptr || row < 0
-        || row >= ui->componentTableWidget->rowCount()) {
-        return;
-    }
-
-    auto *componentComboBox =
-        qobject_cast<QComboBox *>(ui->componentTableWidget->cellWidget(row, kComponentNameColumn));
-    QTableWidgetItem *unitPriceItem = ui->componentTableWidget->item(row, kUnitPriceColumn);
-    QTableWidgetItem *sourceItem = ui->componentTableWidget->item(row, kSourceTypeColumn);
-    if (componentComboBox == nullptr || unitPriceItem == nullptr || sourceItem == nullptr) {
-        return;
-    }
-
-    const double unitPrice = componentComboBox->currentData(Qt::UserRole + 1).toDouble();
-    unitPriceItem->setText(QString::number(unitPrice, 'f', 2));
-    sourceItem->setText(QStringLiteral("手动"));
-    updateComponentTotals();
-}
-
-int MainWindow::customComponentRowForWidget(QWidget *widget) const
-{
-    if (ui == nullptr || ui->componentTableWidget == nullptr || widget == nullptr) {
-        return -1;
-    }
-
-    for (int row = 0; row < ui->componentTableWidget->rowCount(); ++row) {
-        if (ui->componentTableWidget->cellWidget(row, kComponentNameColumn) == widget) {
-            return row;
-        }
-    }
-
-    return -1;
-}
-
-QList<OrderComponentData> MainWindow::collectComponentsFromTable() const
-{
-    QList<OrderComponentData> components;
-
-    for (int row = 0; row < ui->componentTableWidget->rowCount(); ++row) {
-        const auto *componentComboBox =
-            qobject_cast<QComboBox *>(ui->componentTableWidget->cellWidget(row, kComponentNameColumn));
-        const QTableWidgetItem *nameItem =
-            ui->componentTableWidget->item(row, kComponentNameColumn);
-        const QTableWidgetItem *quantityItem =
-            ui->componentTableWidget->item(row, kQuantityPerSetColumn);
-        const QTableWidgetItem *unitPriceItem =
-            ui->componentTableWidget->item(row, kUnitPriceColumn);
-        const QTableWidgetItem *sourceItem =
-            ui->componentTableWidget->item(row, kSourceTypeColumn);
-
-        OrderComponentData component;
-        component.componentName = componentComboBox != nullptr
-                                      ? componentComboBox->currentText().trimmed()
-                                      : nameItem != nullptr ? nameItem->text().trimmed()
-                                                            : QString();
-        component.quantityPerSet = quantityItem != nullptr ? quantityItem->text().toInt() : 0;
-        component.unitPrice = unitPriceItem != nullptr ? unitPriceItem->text().toDouble() : 0.0;
-        component.sourceType =
-            sourceItem != nullptr && sourceItem->text() == QStringLiteral("模板")
-                ? QStringLiteral("template")
-                : QStringLiteral("manual");
-        components.append(component);
-    }
-
-    return components;
-}
-
-void MainWindow::updateComponentTotals()
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    m_updatingComponentTable = true;
-    const QSignalBlocker blocker(ui->componentTableWidget);
-
-    for (int row = 0; row < ui->componentTableWidget->rowCount(); ++row) {
-        QTableWidgetItem *quantityItem =
-            ui->componentTableWidget->item(row, kQuantityPerSetColumn);
-        QTableWidgetItem *unitPriceItem =
-            ui->componentTableWidget->item(row, kUnitPriceColumn);
-        QTableWidgetItem *totalItem = ui->componentTableWidget->item(row, kTotalRequiredColumn);
-        QTableWidgetItem *totalPriceItem =
-            ui->componentTableWidget->item(row, kComponentTotalPriceColumn);
-        if (totalItem == nullptr) {
-            continue;
-        }
-
-        const int quantityPerSet = quantityItem != nullptr ? quantityItem->text().toInt() : 0;
-        const double unitPrice = unitPriceItem != nullptr ? unitPriceItem->text().toDouble() : 0.0;
-        const int totalRequired = quantityPerSet * ui->quantitySetsSpinBox->value();
-        totalItem->setText(quantityPerSet > 0 ? QString::number(totalRequired) : QString());
-        if (totalPriceItem != nullptr) {
-            const double totalPrice = static_cast<double>(totalRequired) * unitPrice;
-            totalPriceItem->setText(quantityPerSet > 0
-                                        ? QString::number(totalPrice, 'f', 2)
-                                        : QString());
-        }
-    }
-
-    m_updatingComponentTable = false;
-    updatePriceDisplays();
-}
-
-void MainWindow::updatePriceDisplays()
-{
-    if (m_isShuttingDown || ui == nullptr || ui->productModelComboBox == nullptr
-        || ui->bodyUnitPriceDoubleSpinBox == nullptr || ui->unitPriceDoubleSpinBox == nullptr) {
-        return;
-    }
-
-    const double bodyUnitPrice = ui->bodyUnitPriceDoubleSpinBox->value();
-    double orderUnitPrice = bodyUnitPrice;
-    for (int row = 0; row < ui->componentTableWidget->rowCount(); ++row) {
-        const QTableWidgetItem *quantityItem =
-            ui->componentTableWidget->item(row, kQuantityPerSetColumn);
-        const QTableWidgetItem *unitPriceItem =
-            ui->componentTableWidget->item(row, kUnitPriceColumn);
-        const QTableWidgetItem *sourceItem =
-            ui->componentTableWidget->item(row, kSourceTypeColumn);
-        const int quantityPerSet = quantityItem != nullptr ? quantityItem->text().toInt() : 0;
-        const double unitPrice = unitPriceItem != nullptr ? unitPriceItem->text().toDouble() : 0.0;
-        const QString sourceText = sourceItem != nullptr ? sourceItem->text() : QString();
-        if (sourceText == QStringLiteral("机体")) {
-            continue;
-        }
-        orderUnitPrice += static_cast<double>(quantityPerSet) * unitPrice;
-    }
-    ui->unitPriceDoubleSpinBox->setValue(orderUnitPrice);
-}
-
-void MainWindow::clearOrderForm()
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    m_updatingComponentTable = true;
-    ui->orderDateEdit->setDate(QDate::currentDate());
-    ui->customerNameLineEdit->clear();
-    ui->quantitySetsSpinBox->setValue(1);
-    ui->bodyUnitPriceDoubleSpinBox->setValue(0.0);
-    ui->unitPriceDoubleSpinBox->setValue(0.0);
-    ui->templateConfigurationRadioButton->setChecked(true);
-    m_updatingComponentTable = false;
-    loadTemplatesForCurrentProduct();
-}
-
-bool MainWindow::validateOrderInput(QString *errorMessage) const
-{
-    if (ui->customerNameLineEdit->text().trimmed().isEmpty()) {
-        *errorMessage = QStringLiteral("客户名称不能为空。");
-        return false;
-    }
-
-    if (ui->productModelComboBox->currentIndex() < 0) {
-        *errorMessage = QStringLiteral("请选择具体型号。");
-        return false;
-    }
-
-    if (ui->bodyUnitPriceDoubleSpinBox->value() < 0.0) {
-        *errorMessage = QStringLiteral("主体单价不能小于 0。");
-        return false;
-    }
-
-    if (ui->templateConfigurationRadioButton->isChecked()
-        && ui->templateComboBox->currentIndex() < 0) {
-        *errorMessage = QStringLiteral("请选择配置模板。");
-        return false;
-    }
-
-    const QList<OrderComponentData> components = collectComponentsFromTable();
-    bool hasValidComponent = false;
-    for (const OrderComponentData &component : components) {
-        if (component.componentName.isEmpty()) {
-            continue;
-        }
-
-        if (component.quantityPerSet <= 0) {
-            *errorMessage = QStringLiteral("组件每套数量必须大于 0。");
-            return false;
-        }
-
-        if (component.unitPrice < 0.0) {
-            *errorMessage = QStringLiteral("组件单价不能小于 0。");
-            return false;
-        }
-
-        hasValidComponent = true;
-    }
-
-    if (!hasValidComponent) {
-        *errorMessage = QStringLiteral("请至少录入一个有效组件。");
-        return false;
-    }
-
-    return true;
-}
-
-void MainWindow::loadQueryProductModels()
-{
-    if (m_isShuttingDown || ui == nullptr || ui->queryProductModelComboBox == nullptr) {
-        return;
-    }
-
-    const QSignalBlocker blocker(ui->queryProductModelComboBox);
-    ui->queryProductModelComboBox->clear();
-    ui->queryProductModelComboBox->addItem(QStringLiteral("全部型号"), QString());
-
-    const QList<ProductModelOption> models = m_databaseManager.productModels();
-    for (const ProductModelOption &model : models) {
-        ui->queryProductModelComboBox->addItem(model.name, model.name);
-    }
-}
-
-void MainWindow::performOrderQuery()
-{
-    if (m_isShuttingDown || ui == nullptr) {
-        return;
-    }
-
-    m_queryOrders = m_databaseManager.queryOrders(ui->queryCustomerLineEdit->text().trimmed(),
-                                                  ui->queryProductModelComboBox->currentData().toString(),
-                                                  ui->queryOnlyUnfinishedCheckBox->isChecked());
-    setQueryOrderRows(m_queryOrders);
-}
-
-void MainWindow::setQueryOrderRows(const QList<ShipmentOrderSummary> &orders)
-{
-    if (m_isShuttingDown || ui == nullptr || ui->orderListTableWidget == nullptr) {
-        return;
-    }
-
-    const int previousOrderId = currentQueryOrderId();
-    ui->orderListTableWidget->setSortingEnabled(false);
-    const QSignalBlocker blocker(ui->orderListTableWidget);
-    ui->orderListTableWidget->setRowCount(0);
-
-    for (const ShipmentOrderSummary &order : orders) {
-        const int row = ui->orderListTableWidget->rowCount();
-        ui->orderListTableWidget->insertRow(row);
-
-        auto *idItem = createIdTableWidgetItem(order.id);
-        auto *dateItem = new QTableWidgetItem(order.orderDate);
-        auto *customerItem = new QTableWidgetItem(order.customerName);
-        auto *categoryItem = new QTableWidgetItem;
-        auto *modelItem = new QTableWidgetItem(order.productModelName);
-        auto *configurationItem = new QTableWidgetItem(order.configurationName);
-        auto *quantityItem = new QTableWidgetItem(QString::number(order.quantitySets));
-        auto *unitPriceItem = new QTableWidgetItem(QString::number(order.unitPrice, 'f', 2));
-        auto *statusItem =
-            new QTableWidgetItem(order.isCompleted ? QStringLiteral("已完成")
-                                                   : QStringLiteral("未完成"));
-        auto *readyItem = new QTableWidgetItem(order.availableSetShipments > 0
-                                                   ? QStringLiteral("可发货")
-                                                   : QStringLiteral("不可发货"));
-
-        ui->orderListTableWidget->setItem(row, kQueryOrderIdColumn, idItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderDateColumn, dateItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderCustomerColumn, customerItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderCategoryColumn, categoryItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderProductModelColumn, modelItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderConfigurationColumn, configurationItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderQuantitySetsColumn, quantityItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderUnitPriceColumn, unitPriceItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderStatusColumn, statusItem);
-        ui->orderListTableWidget->setItem(row, kQueryOrderShipmentReadyColumn, readyItem);
-    }
-
-    applyDefaultAscendingSort(ui->orderListTableWidget, kQueryOrderIdColumn);
-
-    ui->queryOrderCountValueLabel->setText(QString::number(orders.size()));
-
-    int targetRow = -1;
-    for (int row = 0; row < ui->orderListTableWidget->rowCount(); ++row) {
-        const QTableWidgetItem *idItem = ui->orderListTableWidget->item(row, kQueryOrderIdColumn);
-        if (idItem != nullptr && idItem->data(Qt::UserRole).toInt() == previousOrderId) {
-            targetRow = row;
-            break;
-        }
-    }
-    if (targetRow < 0 && ui->orderListTableWidget->rowCount() > 0) {
-        targetRow = 0;
-    }
-
-    if (targetRow >= 0) {
-        ui->orderListTableWidget->selectRow(targetRow);
-    } else {
-        clearQueryDetails();
-    }
-
-    refreshQueryOrderDetails();
-}
-
-void MainWindow::refreshQueryOrderDetails()
-{
-    if (m_isShuttingDown) {
-        return;
-    }
-
-    const int orderItemId = currentQueryOrderId();
-    if (orderItemId <= 0) {
-        clearQueryDetails();
-        return;
-    }
-
-    setQueryComponentRows(m_databaseManager.orderComponents(orderItemId));
-    setQueryShipmentRows(m_databaseManager.orderShipments(orderItemId));
-}
-
-void MainWindow::setQueryComponentRows(const QList<ShipmentComponentStatus> &components)
-{
-    if (m_isShuttingDown || ui == nullptr || ui->orderDetailComponentTableWidget == nullptr) {
-        return;
-    }
-
-    const QSignalBlocker blocker(ui->orderDetailComponentTableWidget);
-    ui->orderDetailComponentTableWidget->setRowCount(0);
-
-    for (const ShipmentComponentStatus &component : components) {
-        const int row = ui->orderDetailComponentTableWidget->rowCount();
-        ui->orderDetailComponentTableWidget->insertRow(row);
-        ui->orderDetailComponentTableWidget->setItem(
-            row, kQueryDetailComponentNameColumn, new QTableWidgetItem(component.componentName));
-        ui->orderDetailComponentTableWidget->setItem(
-            row, kQueryDetailComponentSpecColumn, new QTableWidgetItem);
-        ui->orderDetailComponentTableWidget->setItem(
-            row, kQueryDetailComponentMaterialColumn, new QTableWidgetItem);
-        ui->orderDetailComponentTableWidget->setItem(
-            row, kQueryDetailComponentColorColumn, new QTableWidgetItem);
-        ui->orderDetailComponentTableWidget->setItem(
-            row,
-            kQueryDetailQuantityPerSetColumn,
-            new QTableWidgetItem(QString::number(component.quantityPerSet)));
-        ui->orderDetailComponentTableWidget->setItem(
-            row,
-            kQueryDetailTotalRequiredColumn,
-            new QTableWidgetItem(QString::number(component.totalRequiredQuantity)));
-        ui->orderDetailComponentTableWidget->setItem(
-            row,
-            kQueryDetailUnitPriceColumn,
-            new QTableWidgetItem);
-        ui->orderDetailComponentTableWidget->setItem(
-            row,
-            kQueryDetailSourceColumn,
-            new QTableWidgetItem(
-                QStringLiteral("已发 %1 / 未发 %2")
-                    .arg(component.shippedQuantity)
-                    .arg(component.unshippedQuantity)));
-    }
-}
-
 void MainWindow::setQueryShipmentRows(const QList<OrderShipmentRecord> &records)
 {
     if (m_isShuttingDown || ui == nullptr || ui->orderShipmentHistoryTableWidget == nullptr) {
@@ -4812,6 +4782,16 @@ int MainWindow::currentQueryOrderId() const
 void MainWindow::loadShipmentOrders()
 {
     if (m_isShuttingDown) {
+        return;
+    }
+
+    if (!m_databaseManager.isDatabaseOpen()) {
+        m_shipmentOrders.clear();
+        {
+            const QSignalBlocker blocker(ui->shipmentOrderComboBox);
+            ui->shipmentOrderComboBox->clear();
+        }
+        refreshShipmentDetails();
         return;
     }
 
