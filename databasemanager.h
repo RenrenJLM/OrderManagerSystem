@@ -86,6 +86,7 @@ struct OrderShipmentRecord
 {
     QString shipmentDate;
     QString shipmentType;
+    QString componentName;
     int shipmentQuantity = 0;
     QString note;
 };
@@ -178,6 +179,8 @@ struct InventoryItemData
     QString unitName;
     double unitPrice = 0.0;
     int currentQuantity = 0;
+    int inboundQuantity = 0;
+    int outboundQuantity = 0;
     QString note;
 };
 
@@ -215,6 +218,7 @@ struct StructuredOrderSummary
     double lampshadeUnitPrice = 0.0;
     double configPrice = 0.0;
     QString status;
+    QString remark;
     int availableSetShipments = 0;
     bool isCompleted = false;
     bool hasShipmentRecord = false;
@@ -329,6 +333,7 @@ public:
     bool isStructuredOrderShipmentReady(int orderId);
     int productCategoryIdByName(const QString &categoryName);
     int baseConfigurationIdByCategoryAndCode(int productCategoryId, const QString &configCode);
+    double baseConfigurationPrice(int baseConfigurationId);
     bool upsertProductCategoryByName(const QString &categoryName, bool isActive = true);
     bool upsertProductSkuByNaturalKey(const ProductSkuOption &sku);
     bool upsertBaseConfigurationByNaturalKey(const BaseConfigurationOption &configuration);
@@ -366,9 +371,36 @@ private:
                                    int orderId,
                                    const StructuredOrderComponentSnapshot &component,
                                    int deductionQuantity);
+    bool ensureInventoryItemExists(QSqlDatabase &database,
+                                   const InventoryItemData &item,
+                                   const QString &timestamp,
+                                   const QString &note = QStringLiteral("产品资料自动补齐"));
+    bool syncBaseConfigurationComponentsToInventory(QSqlDatabase &database,
+                                                    int baseConfigurationId,
+                                                    const QList<BaseConfigurationComponentData> &components,
+                                                    const QString &timestamp);
+    bool syncProductSkuToInventory(QSqlDatabase &database,
+                                   const ProductSkuOption &sku,
+                                   const QString &timestamp);
+    int productSkuIdByIdentity(QSqlDatabase &database,
+                               int productCategoryId,
+                               const QString &skuName,
+                               const QString &lampshadeName,
+                               double lampshadeUnitPrice,
+                               int excludeId = 0);
     int inventoryItemIdByIdentity(QSqlDatabase &database,
                                   const InventoryIdentityData &identity,
                                   bool *duplicateFound = nullptr);
+    int baseConfigurationIdByCategoryAndName(QSqlDatabase &database,
+                                             int productCategoryId,
+                                             const QString &configName);
+    bool baseConfigurationCodeExists(QSqlDatabase &database,
+                                     int productCategoryId,
+                                     const QString &configCode,
+                                     int excludeId = 0);
+    QString nextBaseConfigurationCode(QSqlDatabase &database, int productCategoryId);
+    double computeBaseConfigurationPrice(QSqlDatabase &database, int baseConfigurationId);
+    bool syncBaseConfigurationPrice(QSqlDatabase &database, int baseConfigurationId);
     QString bodyComponentName(const QString &productModelName) const;
     double productDefaultPrice(QSqlDatabase &database,
                                const QString &productModelName,

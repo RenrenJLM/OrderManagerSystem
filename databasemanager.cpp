@@ -47,6 +47,27 @@ QString structuredInventoryKey(int productCategoryId,
     return QString::number(productCategoryId) + QLatin1Char('\x1f')
            + inventoryKey(componentName, componentSpec, material, color, unitName);
 }
+
+QString normalizeBaseConfigurationCode(const QString &configCode)
+{
+    return configCode.trimmed().toUpper();
+}
+
+QString alphabeticalSequenceCode(int index)
+{
+    if (index < 0) {
+        return QString();
+    }
+
+    QString code;
+    int value = index;
+    while (value >= 0) {
+        const int remainder = value % 26;
+        code.prepend(QChar(u'A' + remainder));
+        value = value / 26 - 1;
+    }
+    return code;
+}
 }
 
 DatabaseManager::DatabaseManager() {}
@@ -946,7 +967,42 @@ bool DatabaseManager::saveProductSku(const ProductSkuOption &sku)
         return false;
     }
 
-    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    const int duplicateSkuId = productSkuIdByIdentity(database,
+                                                      sku.productCategoryId,
+                                                      sku.skuName,
+                                                      sku.lampshadeName,
+                                                      sku.lampshadeUnitPrice,
+                                                      sku.id);
+    if (duplicateSkuId < 0) {
+        return false;
+    }
+    if (duplicateSkuId > 0) {
+        if (!database.transaction()) {
+            m_lastError = database.lastError().text();
+            return false;
+        }
+        ProductSkuOption normalizedSku = sku;
+        normalizedSku.id = duplicateSkuId;
+        normalizedSku.productCategoryId = sku.productCategoryId;
+        if (!syncProductSkuToInventory(database, normalizedSku, currentTimestamp())) {
+            database.rollback();
+            return false;
+        }
+        if (!database.commit()) {
+            m_lastError = database.lastError().text();
+            database.rollback();
+            return false;
+        }
+        return true;
+    }
+
+    if (!database.transaction()) {
+        m_lastError = database.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(database);
     const QString timestamp = currentTimestamp();
     if (sku.id > 0) {
         query.prepare(QStringLiteral(
@@ -978,6 +1034,20 @@ bool DatabaseManager::saveProductSku(const ProductSkuOption &sku)
 
     if (!query.exec()) {
         m_lastError = query.lastError().text();
+        database.rollback();
+        return false;
+    }
+
+    ProductSkuOption normalizedSku = sku;
+    normalizedSku.productCategoryId = sku.productCategoryId;
+    if (!syncProductSkuToInventory(database, normalizedSku, timestamp)) {
+        database.rollback();
+        return false;
+    }
+
+    if (!database.commit()) {
+        m_lastError = database.lastError().text();
+        database.rollback();
         return false;
     }
 
@@ -993,6 +1063,7 @@ bool DatabaseManager::upsertProductSkuByNaturalKey(const ProductSkuOption &sku)
 
     ProductSkuOption normalizedSku = sku;
     normalizedSku.skuName = sku.skuName.trimmed();
+    normalizedSku.lampshadeName = sku.lampshadeName.trimmed();
 
     QSqlQuery query(QSqlDatabase::database(kConnectionName));
     query.prepare(QStringLiteral(
@@ -1009,6 +1080,39 @@ bool DatabaseManager::upsertProductSkuByNaturalKey(const ProductSkuOption &sku)
     }
 
     return saveProductSku(normalizedSku);
+}
+
+int DatabaseManager::productSkuIdByIdentity(QSqlDatabase &database,
+                                            int productCategoryId,
+                                            const QString &skuName,
+                                            const QString &lampshadeName,
+                                            double lampshadeUnitPrice,
+                                            int excludeId)
+{
+    if (productCategoryId <= 0 || skuName.trimmed().isEmpty() || lampshadeName.trimmed().isEmpty()) {
+        return 0;
+    }
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT id FROM product_skus "
+        "WHERE product_category_id = ? "
+        "AND sku_name = ? "
+        "AND lampshade_name = ? "
+        "AND ABS(COALESCE(lampshade_unit_price, 0) - ?) < 0.0001 "
+        "AND id <> ? "
+        "ORDER BY id ASC LIMIT 1;"));
+    query.addBindValue(productCategoryId);
+    query.addBindValue(skuName.trimmed());
+    query.addBindValue(lampshadeName.trimmed());
+    query.addBindValue(lampshadeUnitPrice);
+    query.addBindValue(excludeId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return -1;
+    }
+
+    return query.next() ? query.value(0).toInt() : 0;
 }
 
 QList<BaseConfigurationOption> DatabaseManager::baseConfigurationsForCategory(int productCategoryId)
@@ -1048,24 +1152,46 @@ QList<BaseConfigurationOption> DatabaseManager::baseConfigurationsForCategory(in
 
 bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &configuration)
 {
+    m_lastError.clear();
     if (configuration.productCategoryId <= 0) {
         m_lastError = QStringLiteral("请先选择所属产品类型。");
-        return false;
-    }
-    if (configuration.configCode.trimmed().isEmpty()) {
-        m_lastError = QStringLiteral("基础配置代码不能为空。");
         return false;
     }
     if (configuration.configName.trimmed().isEmpty()) {
         m_lastError = QStringLiteral("基础配置名称不能为空。");
         return false;
     }
-    if (configuration.configPrice < 0.0) {
-        m_lastError = QStringLiteral("配置价格不能小于 0。");
+
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    QString normalizedCode = normalizeBaseConfigurationCode(configuration.configCode);
+    if (normalizedCode.isEmpty()) {
+        normalizedCode = nextBaseConfigurationCode(database, configuration.productCategoryId);
+        if (normalizedCode.isEmpty()) {
+            if (m_lastError.isEmpty()) {
+                m_lastError = QStringLiteral("无法自动生成基础配置代码。");
+            }
+            return false;
+        }
+    } else {
+        const bool duplicateExists = baseConfigurationCodeExists(database,
+                                                                 configuration.productCategoryId,
+                                                                 normalizedCode,
+                                                                 configuration.id);
+        if (!m_lastError.isEmpty()) {
+            return false;
+        }
+        if (duplicateExists) {
+            m_lastError = QStringLiteral("配置代码已存在：%1").arg(normalizedCode);
+            return false;
+        }
+    }
+
+    if (!database.transaction()) {
+        m_lastError = database.lastError().text();
         return false;
     }
 
-    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    QSqlQuery query(database);
     const QString timestamp = currentTimestamp();
     if (configuration.id > 0) {
         query.prepare(QStringLiteral(
@@ -1074,9 +1200,9 @@ bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &confi
             "config_price = ?, is_active = ?, sort_order = ?, updated_at = ? "
             "WHERE id = ?;"));
         query.bindValue(0, configuration.productCategoryId);
-        query.bindValue(1, configuration.configCode.trimmed());
+        query.bindValue(1, normalizedCode);
         query.bindValue(2, configuration.configName.trimmed());
-        query.bindValue(3, configuration.configPrice);
+        query.bindValue(3, 0.0);
         query.bindValue(4, configuration.isActive ? 1 : 0);
         query.bindValue(5, configuration.sortOrder > 0 ? configuration.sortOrder : configuration.id);
         query.bindValue(6, timestamp);
@@ -1088,9 +1214,9 @@ bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &confi
             "is_active, sort_order, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?);"));
         query.bindValue(0, configuration.productCategoryId);
-        query.bindValue(1, configuration.configCode.trimmed());
+        query.bindValue(1, normalizedCode);
         query.bindValue(2, configuration.configName.trimmed());
-        query.bindValue(3, configuration.configPrice);
+        query.bindValue(3, 0.0);
         query.bindValue(4, configuration.isActive ? 1 : 0);
         query.bindValue(5, configuration.sortOrder > 0 ? configuration.sortOrder : 9999);
         query.bindValue(6, timestamp);
@@ -1099,6 +1225,20 @@ bool DatabaseManager::saveBaseConfiguration(const BaseConfigurationOption &confi
 
     if (!query.exec()) {
         m_lastError = query.lastError().text();
+        database.rollback();
+        return false;
+    }
+
+    const int baseConfigurationId =
+        configuration.id > 0 ? configuration.id : query.lastInsertId().toInt();
+    if (baseConfigurationId > 0 && !syncBaseConfigurationPrice(database, baseConfigurationId)) {
+        database.rollback();
+        return false;
+    }
+
+    if (!database.commit()) {
+        m_lastError = database.lastError().text();
+        database.rollback();
         return false;
     }
 
@@ -1117,13 +1257,31 @@ int DatabaseManager::baseConfigurationIdByCategoryAndCode(int productCategoryId,
         "WHERE product_category_id = ? AND config_code = ? "
         "LIMIT 1;"));
     query.addBindValue(productCategoryId);
-    query.addBindValue(configCode.trimmed());
+    query.addBindValue(normalizeBaseConfigurationCode(configCode));
     if (!query.exec()) {
         m_lastError = query.lastError().text();
         return 0;
     }
 
     return query.next() ? query.value(0).toInt() : 0;
+}
+
+double DatabaseManager::baseConfigurationPrice(int baseConfigurationId)
+{
+    if (baseConfigurationId <= 0) {
+        return 0.0;
+    }
+
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare(QStringLiteral(
+        "SELECT config_price FROM base_configurations WHERE id = ? LIMIT 1;"));
+    query.addBindValue(baseConfigurationId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0.0;
+    }
+
+    return query.next() ? query.value(0).toDouble() : 0.0;
 }
 
 bool DatabaseManager::upsertBaseConfigurationByNaturalKey(
@@ -1135,9 +1293,17 @@ bool DatabaseManager::upsertBaseConfigurationByNaturalKey(
     }
 
     BaseConfigurationOption normalizedConfiguration = configuration;
-    normalizedConfiguration.configCode = configuration.configCode.trimmed();
-    normalizedConfiguration.id = baseConfigurationIdByCategoryAndCode(
-        configuration.productCategoryId, normalizedConfiguration.configCode);
+    normalizedConfiguration.configCode = normalizeBaseConfigurationCode(configuration.configCode);
+    if (!normalizedConfiguration.configCode.isEmpty()) {
+        normalizedConfiguration.id = baseConfigurationIdByCategoryAndCode(
+            configuration.productCategoryId, normalizedConfiguration.configCode);
+    } else {
+        QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+        normalizedConfiguration.id = baseConfigurationIdByCategoryAndName(
+            database,
+            configuration.productCategoryId,
+            configuration.configName);
+    }
     return saveBaseConfiguration(normalizedConfiguration);
 }
 
@@ -1247,9 +1413,143 @@ bool DatabaseManager::replaceBaseConfigurationComponents(
         ++sortOrder;
     }
 
+    if (!syncBaseConfigurationPrice(database, baseConfigurationId)) {
+        database.rollback();
+        return false;
+    }
+
+    if (!syncBaseConfigurationComponentsToInventory(database,
+                                                    baseConfigurationId,
+                                                    components,
+                                                    timestamp)) {
+        database.rollback();
+        return false;
+    }
+
     if (!database.commit()) {
         m_lastError = database.lastError().text();
         database.rollback();
+        return false;
+    }
+
+    return true;
+}
+
+int DatabaseManager::baseConfigurationIdByCategoryAndName(QSqlDatabase &database,
+                                                          int productCategoryId,
+                                                          const QString &configName)
+{
+    if (productCategoryId <= 0 || configName.trimmed().isEmpty()) {
+        return 0;
+    }
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT id FROM base_configurations "
+        "WHERE product_category_id = ? AND config_name = ? "
+        "ORDER BY id ASC LIMIT 1;"));
+    query.addBindValue(productCategoryId);
+    query.addBindValue(configName.trimmed());
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0;
+    }
+
+    m_lastError.clear();
+    return query.next() ? query.value(0).toInt() : 0;
+}
+
+bool DatabaseManager::baseConfigurationCodeExists(QSqlDatabase &database,
+                                                  int productCategoryId,
+                                                  const QString &configCode,
+                                                  int excludeId)
+{
+    if (productCategoryId <= 0 || configCode.trimmed().isEmpty()) {
+        return false;
+    }
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT 1 FROM base_configurations "
+        "WHERE product_category_id = ? AND config_code = ? AND id <> ? "
+        "LIMIT 1;"));
+    query.addBindValue(productCategoryId);
+    query.addBindValue(normalizeBaseConfigurationCode(configCode));
+    query.addBindValue(excludeId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+
+    m_lastError.clear();
+    return query.next();
+}
+
+QString DatabaseManager::nextBaseConfigurationCode(QSqlDatabase &database, int productCategoryId)
+{
+    m_lastError.clear();
+    if (productCategoryId <= 0) {
+        return QString();
+    }
+
+    for (int index = 0; index < 18278; ++index) {
+        const QString candidate = alphabeticalSequenceCode(index);
+        if (!baseConfigurationCodeExists(database, productCategoryId, candidate)) {
+            return candidate;
+        }
+        if (!m_lastError.isEmpty()) {
+            return QString();
+        }
+    }
+
+    m_lastError = QStringLiteral("可用的基础配置代码已耗尽。");
+    return QString();
+}
+
+double DatabaseManager::computeBaseConfigurationPrice(QSqlDatabase &database, int baseConfigurationId)
+{
+    m_lastError.clear();
+    if (baseConfigurationId <= 0) {
+        return 0.0;
+    }
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(quantity * unit_amount), 0) "
+        "FROM base_configuration_components "
+        "WHERE base_configuration_id = ? AND is_active = 1;"));
+    query.addBindValue(baseConfigurationId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return 0.0;
+    }
+    if (!query.next()) {
+        return 0.0;
+    }
+    return query.value(0).toDouble();
+}
+
+bool DatabaseManager::syncBaseConfigurationPrice(QSqlDatabase &database, int baseConfigurationId)
+{
+    m_lastError.clear();
+    if (baseConfigurationId <= 0) {
+        m_lastError = QStringLiteral("请选择有效的基础配置。");
+        return false;
+    }
+
+    const double computedPrice = computeBaseConfigurationPrice(database, baseConfigurationId);
+    if (!m_lastError.isEmpty()) {
+        return false;
+    }
+
+    QSqlQuery updateQuery(database);
+    updateQuery.prepare(QStringLiteral(
+        "UPDATE base_configurations SET config_price = ?, updated_at = ? WHERE id = ?;"));
+    updateQuery.addBindValue(computedPrice);
+    updateQuery.addBindValue(currentTimestamp());
+    updateQuery.addBindValue(baseConfigurationId);
+    if (!updateQuery.exec()) {
+        m_lastError = updateQuery.lastError().text();
         return false;
     }
 
@@ -1410,7 +1710,7 @@ QList<StructuredOrderSummary> DatabaseManager::structuredOrders(const Structured
     QString statement = QStringLiteral(
         "SELECT id, order_date, customer_name, product_category_id, product_category_name, product_sku_name, "
         "base_configuration_name, order_quantity, lampshade_name, lampshade_unit_price, "
-        "config_price, status, product_sku_id, "
+        "config_price, status, remark, product_sku_id, "
         "EXISTS(SELECT 1 FROM structured_shipment_records WHERE structured_shipment_records.order_id = orders.id) "
         "FROM orders");
 
@@ -1463,7 +1763,8 @@ QList<StructuredOrderSummary> DatabaseManager::structuredOrders(const Structured
         order.lampshadeUnitPrice = query.value(9).toDouble();
         order.configPrice = query.value(10).toDouble();
         order.status = query.value(11).toString();
-        order.hasShipmentRecord = query.value(13).toBool();
+        order.remark = query.value(12).toString();
+        order.hasShipmentRecord = query.value(14).toBool();
         QString errorMessage;
         order.availableSetShipments =
             availableSetShipmentsForStructuredOrder(database, order.id, &errorMessage);
@@ -1535,10 +1836,12 @@ QList<OrderShipmentRecord> DatabaseManager::structuredOrderShipments(int orderId
 
     QSqlQuery query(QSqlDatabase::database(kConnectionName));
     query.prepare(QStringLiteral(
-        "SELECT shipment_date, shipment_type, shipment_quantity, COALESCE(note, '') "
-        "FROM structured_shipment_records "
-        "WHERE order_id = ? "
-        "ORDER BY id ASC;"));
+        "SELECT ssr.shipment_date, ssr.shipment_type, "
+        "COALESCE(oc.component_name, ''), ssr.shipment_quantity, COALESCE(ssr.note, '') "
+        "FROM structured_shipment_records ssr "
+        "LEFT JOIN order_components oc ON oc.id = ssr.order_component_id "
+        "WHERE ssr.order_id = ? "
+        "ORDER BY ssr.id ASC;"));
     query.addBindValue(orderId);
 
     if (!query.exec()) {
@@ -1552,8 +1855,9 @@ QList<OrderShipmentRecord> DatabaseManager::structuredOrderShipments(int orderId
         record.shipmentType = query.value(1).toString() == QStringLiteral("order")
                                   ? QStringLiteral("订单级")
                                   : QStringLiteral("组件级");
-        record.shipmentQuantity = query.value(2).toInt();
-        record.note = query.value(3).toString();
+        record.componentName = query.value(2).toString();
+        record.shipmentQuantity = query.value(3).toInt();
+        record.note = query.value(4).toString();
         records.append(record);
     }
 
@@ -1820,7 +2124,10 @@ QList<InventoryDemandSummaryRow> DatabaseManager::inventoryDemandSummary()
         "COALESCE(("
         "    SELECT SUM(ii.current_quantity) "
         "    FROM inventory_items ii "
-        "    WHERE ii.product_category_id = o.product_category_id "
+        "    WHERE (ii.product_category_id = o.product_category_id "
+        "           OR ii.product_category_id = ("
+        "               SELECT id FROM product_categories WHERE name = '通用' LIMIT 1"
+        "           )) "
         "      AND ii.component_name = oc.component_name "
         "      AND COALESCE(ii.component_spec, '') = COALESCE(oc.component_spec, '') "
         "      AND COALESCE(ii.material, '') = COALESCE(oc.material, '') "
@@ -1866,7 +2173,9 @@ QList<InventoryItemData> DatabaseManager::inventoryItems()
     query.prepare(QStringLiteral(
         "SELECT ii.id, COALESCE(ii.product_category_id, 0), COALESCE(pc.name, ''), "
         "ii.component_name, ii.component_spec, ii.material, ii.color, ii.unit_name, "
-        "COALESCE(ii.unit_price, 0), ii.current_quantity, COALESCE(ii.note, '') "
+        "COALESCE(ii.unit_price, 0), ii.current_quantity, "
+        "COALESCE(ii.inbound_quantity, 0), COALESCE(ii.outbound_quantity, 0), "
+        "COALESCE(ii.note, '') "
         "FROM inventory_items ii "
         "LEFT JOIN product_categories pc ON pc.id = ii.product_category_id "
         "ORDER BY ii.component_name ASC, ii.id ASC;"));
@@ -1888,7 +2197,9 @@ QList<InventoryItemData> DatabaseManager::inventoryItems()
         item.unitName = query.value(7).toString();
         item.unitPrice = query.value(8).toDouble();
         item.currentQuantity = query.value(9).toInt();
-        item.note = query.value(10).toString();
+        item.inboundQuantity = query.value(10).toInt();
+        item.outboundQuantity = query.value(11).toInt();
+        item.note = query.value(12).toString();
         items.append(item);
     }
 
@@ -1898,8 +2209,33 @@ QList<InventoryItemData> DatabaseManager::inventoryItems()
 QList<ProductComponentOption> DatabaseManager::inventoryComponentOptions(int productCategoryId)
 {
     QList<ProductComponentOption> options;
-    QSqlQuery query(QSqlDatabase::database(kConnectionName));
-    QString statement = QStringLiteral(
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    QHash<QString, int> optionIndexByIdentity;
+    const auto optionIdentityKey = [](const ProductComponentOption &option) {
+        return QString::number(option.productCategoryId)
+               + QLatin1Char('\x1f') + option.name.trimmed()
+               + QLatin1Char('\x1f') + option.componentSpec.trimmed()
+               + QLatin1Char('\x1f') + option.material.trimmed()
+               + QLatin1Char('\x1f') + option.color.trimmed()
+               + QLatin1Char('\x1f') + option.unitName.trimmed();
+    };
+    const auto appendOption = [&](const ProductComponentOption &option) {
+        const QString identityKey = optionIdentityKey(option);
+        const auto existingIt = optionIndexByIdentity.constFind(identityKey);
+        if (existingIt == optionIndexByIdentity.cend()) {
+            optionIndexByIdentity.insert(identityKey, options.size());
+            options.append(option);
+            return;
+        }
+
+        ProductComponentOption &existing = options[existingIt.value()];
+        if (existing.unitPrice <= 0.0 && option.unitPrice > 0.0) {
+            existing.unitPrice = option.unitPrice;
+        }
+    };
+
+    QSqlQuery inventoryQuery(database);
+    QString inventoryStatement = QStringLiteral(
         "SELECT ii.id, ii.component_name, COALESCE(ii.component_spec, ''), "
         "COALESCE(ii.material, ''), COALESCE(ii.color, ''), COALESCE(ii.unit_name, '件'), "
         "COALESCE(ii.unit_price, 0), COALESCE(ii.product_category_id, 0), COALESCE(pc.name, '') "
@@ -1907,46 +2243,38 @@ QList<ProductComponentOption> DatabaseManager::inventoryComponentOptions(int pro
         "LEFT JOIN product_categories pc ON pc.id = ii.product_category_id "
         "WHERE COALESCE(ii.unit_price, 0) > 0");
     if (productCategoryId > 0) {
-        statement += QStringLiteral(" AND (ii.product_category_id = ? OR ii.product_category_id IS NULL)");
+        inventoryStatement += QStringLiteral(
+            " AND (ii.product_category_id = ? "
+            "      OR ii.product_category_id IS NULL "
+            "      OR ii.product_category_id = ("
+            "          SELECT id FROM product_categories WHERE name = '通用' LIMIT 1"
+            "      ))");
     }
-    statement += QStringLiteral(" ORDER BY ii.component_name ASC, ii.component_spec ASC, ii.id ASC;");
+    inventoryStatement +=
+        QStringLiteral(" ORDER BY ii.component_name ASC, ii.component_spec ASC, ii.id ASC;");
 
-    query.prepare(statement);
+    inventoryQuery.prepare(inventoryStatement);
     if (productCategoryId > 0) {
-        query.addBindValue(productCategoryId);
+        inventoryQuery.addBindValue(productCategoryId);
     }
 
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
+    if (!inventoryQuery.exec()) {
+        m_lastError = inventoryQuery.lastError().text();
         return options;
     }
 
-    QSet<QString> seenVariants;
-    while (query.next()) {
+    while (inventoryQuery.next()) {
         ProductComponentOption option;
-        option.id = query.value(0).toInt();
-        option.name = query.value(1).toString();
-        option.componentSpec = query.value(2).toString();
-        option.material = query.value(3).toString();
-        option.color = query.value(4).toString();
-        option.unitName = query.value(5).toString();
-        option.unitPrice = query.value(6).toDouble();
-        option.productCategoryId = query.value(7).toInt();
-        option.productCategoryName = query.value(8).toString();
-
-        const QString variantKey = QString::number(option.productCategoryId)
-                                   + QLatin1Char('\x1f') + option.name.trimmed()
-                                   + QLatin1Char('\x1f') + option.componentSpec.trimmed()
-                                   + QLatin1Char('\x1f') + option.material.trimmed()
-                                   + QLatin1Char('\x1f') + option.color.trimmed()
-                                   + QLatin1Char('\x1f') + option.unitName.trimmed()
-                                   + QLatin1Char('\x1f')
-                                   + QString::number(option.unitPrice, 'f', 4);
-        if (seenVariants.contains(variantKey)) {
-            continue;
-        }
-        seenVariants.insert(variantKey);
-        options.append(option);
+        option.id = inventoryQuery.value(0).toInt();
+        option.name = inventoryQuery.value(1).toString();
+        option.componentSpec = inventoryQuery.value(2).toString();
+        option.material = inventoryQuery.value(3).toString();
+        option.color = inventoryQuery.value(4).toString();
+        option.unitName = inventoryQuery.value(5).toString();
+        option.unitPrice = inventoryQuery.value(6).toDouble();
+        option.productCategoryId = inventoryQuery.value(7).toInt();
+        option.productCategoryName = inventoryQuery.value(8).toString();
+        appendOption(option);
     }
 
     return options;
@@ -1954,16 +2282,12 @@ QList<ProductComponentOption> DatabaseManager::inventoryComponentOptions(int pro
 
 bool DatabaseManager::saveInventoryItem(const InventoryItemData &item)
 {
-    if (item.productCategoryId <= 0) {
-        m_lastError = QStringLiteral("请选择适用产品类型。");
-        return false;
-    }
     if (item.componentName.trimmed().isEmpty()) {
         m_lastError = QStringLiteral("库存物料名称不能为空。");
         return false;
     }
-    if (item.currentQuantity < 0) {
-        m_lastError = QStringLiteral("库存数量不能小于 0。");
+    if (item.inboundQuantity < 0 || item.outboundQuantity < 0) {
+        m_lastError = QStringLiteral("入库数量和出库数量不能小于 0。");
         return false;
     }
     if (item.unitPrice <= 0.0) {
@@ -1971,48 +2295,118 @@ bool DatabaseManager::saveInventoryItem(const InventoryItemData &item)
         return false;
     }
 
-    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    int productCategoryId = item.productCategoryId;
+    if (productCategoryId <= 0) {
+        productCategoryId = productCategoryIdByName(QStringLiteral("通用"));
+        if (productCategoryId <= 0 && !upsertProductCategoryByName(QStringLiteral("通用"))) {
+            return false;
+        }
+        if (productCategoryId <= 0) {
+            productCategoryId = productCategoryIdByName(QStringLiteral("通用"));
+        }
+    }
+    if (productCategoryId <= 0) {
+        m_lastError = QStringLiteral("无法确定适用产品类型。");
+        return false;
+    }
+
+    if (!database.transaction()) {
+        m_lastError = database.lastError().text();
+        return false;
+    }
+
+    const QString normalizedUnitName =
+        item.unitName.trimmed().isEmpty() ? QStringLiteral("件") : item.unitName.trimmed();
     const QString timestamp = currentTimestamp();
+    int currentQuantity = item.currentQuantity;
+    int inboundQuantity = item.inboundQuantity;
+    int outboundQuantity = item.outboundQuantity;
+
     if (item.id > 0) {
+        QSqlQuery currentQuery(database);
+        currentQuery.prepare(QStringLiteral(
+            "SELECT current_quantity, COALESCE(inbound_quantity, 0), COALESCE(outbound_quantity, 0) "
+            "FROM inventory_items WHERE id = ? LIMIT 1;"));
+        currentQuery.addBindValue(item.id);
+        if (!currentQuery.exec() || !currentQuery.next()) {
+            m_lastError = currentQuery.lastError().isValid()
+                              ? currentQuery.lastError().text()
+                              : QStringLiteral("未找到库存记录。");
+            database.rollback();
+            return false;
+        }
+
+        currentQuantity = currentQuery.value(0).toInt() + item.inboundQuantity - item.outboundQuantity;
+        inboundQuantity = currentQuery.value(1).toInt() + item.inboundQuantity;
+        outboundQuantity = currentQuery.value(2).toInt() + item.outboundQuantity;
+        if (currentQuantity < 0) {
+            m_lastError = QStringLiteral("出库数量不能大于当前库存。");
+            database.rollback();
+            return false;
+        }
+
+        QSqlQuery query(database);
         query.prepare(QStringLiteral(
             "UPDATE inventory_items "
             "SET product_category_id = ?, component_name = ?, component_spec = ?, material = ?, "
-            "color = ?, unit_name = ?, unit_price = ?, current_quantity = ?, note = ?, updated_at = ? "
+            "color = ?, unit_name = ?, unit_price = ?, current_quantity = ?, "
+            "inbound_quantity = ?, outbound_quantity = ?, note = ?, updated_at = ? "
             "WHERE id = ?;"));
-        query.bindValue(0, item.productCategoryId);
+        query.bindValue(0, productCategoryId);
         query.bindValue(1, item.componentName.trimmed());
         query.bindValue(2, item.componentSpec.trimmed());
         query.bindValue(3, item.material.trimmed());
         query.bindValue(4, item.color.trimmed());
-        query.bindValue(5, item.unitName.trimmed().isEmpty()
-                                ? QStringLiteral("件")
-                                : item.unitName.trimmed());
+        query.bindValue(5, normalizedUnitName);
         query.bindValue(6, item.unitPrice);
-        query.bindValue(7, item.currentQuantity);
-        query.bindValue(8, item.note.trimmed());
-        query.bindValue(9, timestamp);
-        query.bindValue(10, item.id);
+        query.bindValue(7, currentQuantity);
+        query.bindValue(8, inboundQuantity);
+        query.bindValue(9, outboundQuantity);
+        query.bindValue(10, item.note.trimmed());
+        query.bindValue(11, timestamp);
+        query.bindValue(12, item.id);
+        if (!query.exec()) {
+            m_lastError = query.lastError().text();
+            database.rollback();
+            return false;
+        }
     } else {
+        currentQuantity = item.inboundQuantity - item.outboundQuantity;
+        if (currentQuantity < 0) {
+            m_lastError = QStringLiteral("新建库存记录时，出库数量不能大于入库数量。");
+            database.rollback();
+            return false;
+        }
+
+        QSqlQuery query(database);
         query.prepare(QStringLiteral(
             "INSERT INTO inventory_items "
-            "(product_category_id, component_name, component_spec, material, color, unit_name, unit_price, current_quantity, note, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"));
-        query.bindValue(0, item.productCategoryId);
+            "(product_category_id, component_name, component_spec, material, color, unit_name, unit_price, "
+            "current_quantity, inbound_quantity, outbound_quantity, note, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"));
+        query.bindValue(0, productCategoryId);
         query.bindValue(1, item.componentName.trimmed());
         query.bindValue(2, item.componentSpec.trimmed());
         query.bindValue(3, item.material.trimmed());
         query.bindValue(4, item.color.trimmed());
-        query.bindValue(5, item.unitName.trimmed().isEmpty()
-                                ? QStringLiteral("件")
-                                : item.unitName.trimmed());
+        query.bindValue(5, normalizedUnitName);
         query.bindValue(6, item.unitPrice);
-        query.bindValue(7, item.currentQuantity);
-        query.bindValue(8, item.note.trimmed());
-        query.bindValue(9, timestamp);
+        query.bindValue(7, currentQuantity);
+        query.bindValue(8, item.inboundQuantity);
+        query.bindValue(9, item.outboundQuantity);
+        query.bindValue(10, item.note.trimmed());
+        query.bindValue(11, timestamp);
+        if (!query.exec()) {
+            m_lastError = query.lastError().text();
+            database.rollback();
+            return false;
+        }
     }
 
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
+    if (!database.commit()) {
+        m_lastError = database.lastError().text();
+        database.rollback();
         return false;
     }
 
@@ -2093,6 +2487,226 @@ bool DatabaseManager::upsertInventoryItemByNaturalKey(const InventoryItemData &i
     return saveInventoryItem(normalizedItem);
 }
 
+bool DatabaseManager::ensureInventoryItemExists(QSqlDatabase &database,
+                                                const InventoryItemData &item,
+                                                const QString &timestamp,
+                                                const QString &note)
+{
+    if (item.productCategoryId <= 0) {
+        m_lastError = QStringLiteral("无法确定物料所属产品类型。");
+        return false;
+    }
+
+    const QString componentName = item.componentName.trimmed();
+    if (componentName.isEmpty()) {
+        return true;
+    }
+
+    const QString componentSpec = item.componentSpec.trimmed();
+    const QString material = item.material.trimmed();
+    const QString color = item.color.trimmed();
+    const QString unitName = item.unitName.trimmed().isEmpty() ? QStringLiteral("件")
+                                                               : item.unitName.trimmed();
+    const double unitPrice = qMax(item.unitPrice, kDefaultNonZeroUnitPrice);
+
+    struct ExistingInventoryRow
+    {
+        int id = 0;
+        int currentQuantity = 0;
+        int inboundQuantity = 0;
+        int outboundQuantity = 0;
+        QString note;
+    };
+
+    QList<ExistingInventoryRow> existingRows;
+    QSqlQuery existingQuery(database);
+    existingQuery.prepare(QStringLiteral(
+        "SELECT id, COALESCE(current_quantity, 0), COALESCE(inbound_quantity, 0), "
+        "COALESCE(outbound_quantity, 0), COALESCE(note, '') "
+        "FROM inventory_items "
+        "WHERE product_category_id = ? "
+        "AND component_name = ? "
+        "AND COALESCE(component_spec, '') = ? "
+        "AND COALESCE(material, '') = ? "
+        "AND COALESCE(color, '') = ? "
+        "AND COALESCE(unit_name, '件') = ? "
+        "AND ABS(COALESCE(unit_price, 0) - ?) < 0.0001 "
+        "ORDER BY id ASC;"));
+    existingQuery.addBindValue(item.productCategoryId);
+    existingQuery.addBindValue(componentName);
+    existingQuery.addBindValue(componentSpec);
+    existingQuery.addBindValue(material);
+    existingQuery.addBindValue(color);
+    existingQuery.addBindValue(unitName);
+    existingQuery.addBindValue(unitPrice);
+    if (!existingQuery.exec()) {
+        m_lastError = existingQuery.lastError().text();
+        return false;
+    }
+
+    while (existingQuery.next()) {
+        ExistingInventoryRow row;
+        row.id = existingQuery.value(0).toInt();
+        row.currentQuantity = existingQuery.value(1).toInt();
+        row.inboundQuantity = existingQuery.value(2).toInt();
+        row.outboundQuantity = existingQuery.value(3).toInt();
+        row.note = existingQuery.value(4).toString();
+        existingRows.append(row);
+    }
+
+    if (!existingRows.isEmpty()) {
+        if (existingRows.size() == 1) {
+            return true;
+        }
+
+        int totalCurrentQuantity = 0;
+        int totalInboundQuantity = 0;
+        int totalOutboundQuantity = 0;
+        QString mergedNote;
+        for (const ExistingInventoryRow &row : existingRows) {
+            totalCurrentQuantity += row.currentQuantity;
+            totalInboundQuantity += row.inboundQuantity;
+            totalOutboundQuantity += row.outboundQuantity;
+            if (mergedNote.isEmpty() && !row.note.trimmed().isEmpty()) {
+                mergedNote = row.note.trimmed();
+            }
+        }
+        if (mergedNote.isEmpty()) {
+            mergedNote = note.trimmed().isEmpty() ? QStringLiteral("产品资料自动补齐") : note.trimmed();
+        }
+
+        const int primaryId = existingRows.first().id;
+        QSqlQuery updatePrimaryQuery(database);
+        updatePrimaryQuery.prepare(QStringLiteral(
+            "UPDATE inventory_items "
+            "SET current_quantity = ?, inbound_quantity = ?, outbound_quantity = ?, note = ?, updated_at = ? "
+            "WHERE id = ?;"));
+        updatePrimaryQuery.addBindValue(totalCurrentQuantity);
+        updatePrimaryQuery.addBindValue(totalInboundQuantity);
+        updatePrimaryQuery.addBindValue(totalOutboundQuantity);
+        updatePrimaryQuery.addBindValue(mergedNote);
+        updatePrimaryQuery.addBindValue(timestamp);
+        updatePrimaryQuery.addBindValue(primaryId);
+        if (!updatePrimaryQuery.exec()) {
+            m_lastError = updatePrimaryQuery.lastError().text();
+            return false;
+        }
+
+        QSqlQuery deleteDuplicateQuery(database);
+        deleteDuplicateQuery.prepare(QStringLiteral("DELETE FROM inventory_items WHERE id = ?;"));
+        for (int index = 1; index < existingRows.size(); ++index) {
+            deleteDuplicateQuery.addBindValue(existingRows.at(index).id);
+            if (!deleteDuplicateQuery.exec()) {
+                m_lastError = deleteDuplicateQuery.lastError().text();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    QSqlQuery insertQuery(database);
+    insertQuery.prepare(QStringLiteral(
+        "INSERT INTO inventory_items "
+        "(product_category_id, component_name, component_spec, material, color, unit_name, unit_price, "
+        "current_quantity, inbound_quantity, outbound_quantity, note, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?);"));
+    insertQuery.bindValue(0, item.productCategoryId);
+    insertQuery.bindValue(1, componentName);
+    insertQuery.bindValue(2, componentSpec);
+    insertQuery.bindValue(3, material);
+    insertQuery.bindValue(4, color);
+    insertQuery.bindValue(5, unitName);
+    insertQuery.bindValue(6, unitPrice);
+    insertQuery.bindValue(7, note.trimmed().isEmpty() ? QStringLiteral("产品资料自动补齐") : note.trimmed());
+    insertQuery.bindValue(8, timestamp);
+    if (!insertQuery.exec()) {
+        m_lastError = insertQuery.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool DatabaseManager::syncBaseConfigurationComponentsToInventory(
+    QSqlDatabase &database,
+    int baseConfigurationId,
+    const QList<BaseConfigurationComponentData> &components,
+    const QString &timestamp)
+{
+    if (baseConfigurationId <= 0) {
+        m_lastError = QStringLiteral("请选择有效的基础配置。");
+        return false;
+    }
+
+    QSqlQuery categoryQuery(database);
+    categoryQuery.prepare(QStringLiteral(
+        "SELECT product_category_id FROM base_configurations WHERE id = ? LIMIT 1;"));
+    categoryQuery.addBindValue(baseConfigurationId);
+    if (!categoryQuery.exec() || !categoryQuery.next()) {
+        m_lastError = categoryQuery.lastError().isValid()
+                          ? categoryQuery.lastError().text()
+                          : QStringLiteral("未找到基础配置所属产品类型。");
+        return false;
+    }
+
+    const int productCategoryId = categoryQuery.value(0).toInt();
+    if (productCategoryId <= 0) {
+        m_lastError = QStringLiteral("基础配置未绑定有效的产品类型。");
+        return false;
+    }
+
+    QSet<QString> seenKeys;
+    for (const BaseConfigurationComponentData &component : components) {
+        if (component.componentName.trimmed().isEmpty() || component.quantity <= 0) {
+            continue;
+        }
+
+        const QString unitName = component.unitName.trimmed().isEmpty()
+                                     ? QStringLiteral("件")
+                                     : component.unitName.trimmed();
+        const QString identityKey = QString::number(productCategoryId)
+                                    + QLatin1Char('\x1f') + component.componentName.trimmed()
+                                    + QLatin1Char('\x1f') + component.componentSpec.trimmed()
+                                    + QLatin1Char('\x1f') + component.material.trimmed()
+                                    + QLatin1Char('\x1f') + component.color.trimmed()
+                                    + QLatin1Char('\x1f') + unitName;
+        if (seenKeys.contains(identityKey)) {
+            continue;
+        }
+        seenKeys.insert(identityKey);
+
+        InventoryItemData item;
+        item.productCategoryId = productCategoryId;
+        item.componentName = component.componentName.trimmed();
+        item.componentSpec = component.componentSpec.trimmed();
+        item.material = component.material.trimmed();
+        item.color = component.color.trimmed();
+        item.unitName = unitName;
+        item.unitPrice = component.unitAmount;
+        if (!ensureInventoryItemExists(database, item, timestamp)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool DatabaseManager::syncProductSkuToInventory(QSqlDatabase &database,
+                                                const ProductSkuOption &sku,
+                                                const QString &timestamp)
+{
+    if (sku.productCategoryId <= 0 || sku.lampshadeName.trimmed().isEmpty()) {
+        return true;
+    }
+
+    InventoryItemData item;
+    item.productCategoryId = sku.productCategoryId;
+    item.componentName = sku.lampshadeName.trimmed();
+    item.unitName = QStringLiteral("件");
+    item.unitPrice = sku.lampshadeUnitPrice;
+    return ensureInventoryItemExists(database, item, timestamp, QStringLiteral("产品资料自动补齐"));
+}
+
 bool DatabaseManager::isStructuredOrderShipmentReady(int orderId)
 {
     if (orderId <= 0) {
@@ -2110,10 +2724,13 @@ bool DatabaseManager::isStructuredOrderShipmentReady(int orderId)
     }
     productCategoryId = orderQuery.value(0).toInt();
 
+    const int commonCategoryId = productCategoryIdByName(QStringLiteral("通用"));
     QHash<QString, int> inventoryByKey;
     for (const InventoryItemData &item : inventoryItems()) {
-        if (productCategoryId > 0 && item.productCategoryId > 0
-            && item.productCategoryId != productCategoryId) {
+        const bool sameCategory = productCategoryId <= 0 || item.productCategoryId <= 0
+                                  || item.productCategoryId == productCategoryId;
+        const bool commonCategory = commonCategoryId > 0 && item.productCategoryId == commonCategoryId;
+        if (!sameCategory && !commonCategory) {
             continue;
         }
         const QString key =
@@ -2570,7 +3187,10 @@ bool DatabaseManager::deductStructuredInventory(QSqlDatabase &database,
     inventoryQuery.prepare(QStringLiteral(
         "SELECT id, current_quantity "
         "FROM inventory_items "
-        "WHERE product_category_id = ? "
+        "WHERE (product_category_id = ? "
+        "       OR product_category_id = ("
+        "           SELECT id FROM product_categories WHERE name = '通用' LIMIT 1"
+        "       )) "
         "AND component_name = ? "
         "AND COALESCE(component_spec, '') = ? "
         "AND COALESCE(material, '') = ? "
@@ -2607,9 +3227,11 @@ bool DatabaseManager::deductStructuredInventory(QSqlDatabase &database,
         return false;
     }
 
-    QSqlQuery updateInventory(database);
-    updateInventory.prepare(QStringLiteral(
-        "UPDATE inventory_items SET current_quantity = ?, updated_at = ? WHERE id = ?;"));
+QSqlQuery updateInventory(database);
+updateInventory.prepare(QStringLiteral(
+        "UPDATE inventory_items "
+        "SET current_quantity = ?, outbound_quantity = COALESCE(outbound_quantity, 0) + ?, updated_at = ? "
+        "WHERE id = ?;"));
     const QString timestamp = currentTimestamp();
 
     int remaining = deductionQuantity;
@@ -2620,8 +3242,9 @@ bool DatabaseManager::deductStructuredInventory(QSqlDatabase &database,
 
         const int deduction = qMin(candidate.currentQuantity, remaining);
         updateInventory.bindValue(0, candidate.currentQuantity - deduction);
-        updateInventory.bindValue(1, timestamp);
-        updateInventory.bindValue(2, candidate.id);
+        updateInventory.bindValue(1, deduction);
+        updateInventory.bindValue(2, timestamp);
+        updateInventory.bindValue(3, candidate.id);
         if (!updateInventory.exec()) {
             m_lastError = updateInventory.lastError().text();
             return false;
@@ -3035,13 +3658,39 @@ bool DatabaseManager::openDatabase(const QString &filePath)
         return false;
     }
 
+    if (!enableForeignKeys()) {
+        return false;
+    }
+
+    if (database.tables().contains(QStringLiteral("inventory_items"))
+        && (!ensureColumnExists(QStringLiteral("inventory_items"),
+                                QStringLiteral("inbound_quantity"),
+                                QStringLiteral("INTEGER NOT NULL DEFAULT 0"))
+            || !ensureColumnExists(QStringLiteral("inventory_items"),
+                                   QStringLiteral("outbound_quantity"),
+                                   QStringLiteral("INTEGER NOT NULL DEFAULT 0")))) {
+        return false;
+    }
+
+    if (database.tables().contains(QStringLiteral("product_categories"))
+        && !upsertProductCategoryByName(QStringLiteral("通用"))) {
+        return false;
+    }
+
     m_currentDatabasePath = QFileInfo(filePath).absoluteFilePath();
     return true;
 }
 
 bool DatabaseManager::createCurrentSchema()
 {
-    return enableForeignKeys() && createTables();
+    return enableForeignKeys() && createTables()
+           && ensureColumnExists(QStringLiteral("inventory_items"),
+                                 QStringLiteral("inbound_quantity"),
+                                 QStringLiteral("INTEGER NOT NULL DEFAULT 0"))
+           && ensureColumnExists(QStringLiteral("inventory_items"),
+                                 QStringLiteral("outbound_quantity"),
+                                 QStringLiteral("INTEGER NOT NULL DEFAULT 0"))
+           && upsertProductCategoryByName(QStringLiteral("通用"));
 }
 
 bool DatabaseManager::enableForeignKeys()
@@ -3175,6 +3824,8 @@ bool DatabaseManager::createTables()
             "unit_name TEXT NOT NULL DEFAULT '件',"
             "unit_price REAL NOT NULL DEFAULT 0,"
             "current_quantity INTEGER NOT NULL DEFAULT 0,"
+            "inbound_quantity INTEGER NOT NULL DEFAULT 0,"
+            "outbound_quantity INTEGER NOT NULL DEFAULT 0,"
             "note TEXT,"
             "updated_at TEXT NOT NULL"
             ");")

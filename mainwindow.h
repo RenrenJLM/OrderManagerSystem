@@ -22,6 +22,7 @@ class QLineEdit;
 class QListWidget;
 class QLabel;
 class QPushButton;
+class QResizeEvent;
 class QStackedWidget;
 class QTableWidget;
 class QTabWidget;
@@ -39,6 +40,7 @@ public:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void setupUiState();
@@ -117,9 +119,7 @@ private:
     void exportOrderSummaryCsv();
     void exportInventoryDemandCsv();
     void exportCurrentOrderShipmentCsv();
-    void printCurrentOrder();
     StructuredOrderSummary structuredOrderSummaryById(int orderId) const;
-    QString buildPrintableOrderText(int orderId);
     bool writeCsvFile(const QString &dialogTitle,
                       const QString &defaultFileName,
                       const QStringList &headers,
@@ -136,6 +136,8 @@ private:
     void refreshShipmentReadyTables();
     void refreshStructuredShipmentReadySummary();
     void refreshStructuredOperationalViews(bool reloadInventoryPage);
+    void updateResponsiveTableColumnWidths();
+    void updateInventoryTableColumnWidths();
     int currentInventoryItemId() const;
     int currentInventoryDemandOrderId() const;
     void setQueryShipmentRows(const QList<OrderShipmentRecord> &records);
@@ -183,7 +185,9 @@ private:
     QLineEdit *m_inventoryColorLineEdit = nullptr;
     QLineEdit *m_inventoryUnitLineEdit = nullptr;
     QDoubleSpinBox *m_inventoryUnitPriceSpinBox = nullptr;
-    QSpinBox *m_inventoryQuantitySpinBox = nullptr;
+    QLineEdit *m_inventoryCurrentQuantityLineEdit = nullptr;
+    QSpinBox *m_inventoryInboundQuantitySpinBox = nullptr;
+    QSpinBox *m_inventoryOutboundQuantitySpinBox = nullptr;
     QLineEdit *m_inventoryNoteLineEdit = nullptr;
     QPushButton *m_saveInventoryButton = nullptr;
     QPushButton *m_clearInventoryButton = nullptr;
@@ -203,7 +207,6 @@ private:
     QPushButton *m_exportOrderSummaryButton = nullptr;
     QPushButton *m_exportInventoryDemandButton = nullptr;
     QPushButton *m_exportShipmentListButton = nullptr;
-    QPushButton *m_printCurrentOrderButton = nullptr;
     QList<ProductSkuOption> m_structuredQuerySkus;
     QList<StructuredOrderSummary> m_structuredQueryOrders;
     QList<StructuredOrderSummary> m_filteredStructuredQueryOrders;

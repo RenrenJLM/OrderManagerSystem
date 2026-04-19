@@ -143,6 +143,7 @@
 - `CMakeLists.txt`
 - 项目结构
 - 数据库初始化相关代码
+- 问题解决后将其记录进 `development_log.md`
 
 常用命令：
 

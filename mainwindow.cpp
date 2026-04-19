@@ -20,14 +20,14 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QListView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
-#include <QPrintDialog>
-#include <QPrinter>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QStringConverter>
 #include <QSet>
@@ -37,7 +37,6 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTableWidgetItem>
-#include <QTextDocument>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -92,6 +91,65 @@ void configurePreferredColumn(QTableWidget *tableWidget,
 void configureFixedIdColumn(QTableWidget *tableWidget, int column, int width = 96)
 {
     configurePreferredColumn(tableWidget, column, width, QHeaderView::Interactive);
+}
+
+struct AdaptiveColumnWidthRule
+{
+    int column = -1;
+    int minWidth = 0;
+    double growthWeight = 0.0;
+};
+
+void applyAdaptiveTableColumnWidths(QTableWidget *tableWidget,
+                                    const QList<QPair<int, int>> &fixedColumns,
+                                    const QList<AdaptiveColumnWidthRule> &flexibleColumns,
+                                    int reservedSpacing = 24)
+{
+    if (tableWidget == nullptr || tableWidget->horizontalHeader() == nullptr) {
+        return;
+    }
+
+    QHeaderView *header = tableWidget->horizontalHeader();
+    const int viewportWidth = tableWidget->viewport()->width();
+    if (viewportWidth <= 0) {
+        return;
+    }
+
+    int fixedWidth = 0;
+    for (const auto &rule : fixedColumns) {
+        fixedWidth += rule.second;
+    }
+
+    int flexibleMinWidth = 0;
+    double totalGrowthWeight = 0.0;
+    for (const AdaptiveColumnWidthRule &rule : flexibleColumns) {
+        flexibleMinWidth += rule.minWidth;
+        totalGrowthWeight += rule.growthWeight;
+    }
+
+    const int extraWidth =
+        qMax(0, viewportWidth - fixedWidth - flexibleMinWidth - qMax(0, reservedSpacing));
+
+    for (const auto &rule : fixedColumns) {
+        configurePreferredColumn(tableWidget, rule.first, rule.second);
+        header->setSectionResizeMode(rule.first, QHeaderView::Interactive);
+    }
+
+    int distributedWidth = 0;
+    for (int index = 0; index < flexibleColumns.size(); ++index) {
+        const AdaptiveColumnWidthRule &rule = flexibleColumns.at(index);
+        int width = rule.minWidth;
+        if (index == flexibleColumns.size() - 1) {
+            width += qMax(0, extraWidth - distributedWidth);
+        } else if (totalGrowthWeight > 0.0) {
+            const int share =
+                qRound(extraWidth * (rule.growthWeight / totalGrowthWeight));
+            width += share;
+            distributedWidth += share;
+        }
+        configurePreferredColumn(tableWidget, rule.column, width);
+        header->setSectionResizeMode(rule.column, QHeaderView::Interactive);
+    }
 }
 
 void applyDefaultAscendingSort(QTableWidget *tableWidget, int column)
@@ -177,8 +235,9 @@ constexpr int kQueryDetailSourceColumn = 7;
 
 constexpr int kQueryShipmentDateColumn = 0;
 constexpr int kQueryShipmentTypeColumn = 1;
-constexpr int kQueryShipmentQuantityColumn = 2;
-constexpr int kQueryShipmentNoteColumn = 3;
+constexpr int kQueryShipmentComponentColumn = 2;
+constexpr int kQueryShipmentQuantityColumn = 3;
+constexpr int kQueryShipmentNoteColumn = 4;
 
 constexpr int kCategoryEditorIdColumn = 0;
 constexpr int kCategoryEditorNameColumn = 1;
@@ -212,8 +271,10 @@ constexpr int kInventoryListMaterialColumn = 4;
 constexpr int kInventoryListColorColumn = 5;
 constexpr int kInventoryListUnitColumn = 6;
 constexpr int kInventoryListUnitPriceColumn = 7;
-constexpr int kInventoryListQuantityColumn = 8;
-constexpr int kInventoryListNoteColumn = 9;
+constexpr int kInventoryListCurrentQuantityColumn = 8;
+constexpr int kInventoryListInboundQuantityColumn = 9;
+constexpr int kInventoryListOutboundQuantityColumn = 10;
+constexpr int kInventoryListNoteColumn = 11;
 
 constexpr int kDemandSummaryCategoryColumn = 0;
 constexpr int kDemandSummaryNameColumn = 1;
@@ -232,6 +293,20 @@ constexpr int kReadyOrderSkuColumn = 3;
 constexpr int kReadyOrderConfigurationColumn = 4;
 constexpr int kReadyOrderQuantityColumn = 5;
 constexpr int kReadyOrderStatusColumn = 6;
+
+constexpr int kComponentOptionSpecRole = Qt::UserRole + 10;
+constexpr int kComponentOptionMaterialRole = Qt::UserRole + 11;
+constexpr int kComponentOptionColorRole = Qt::UserRole + 12;
+constexpr int kComponentOptionUnitRole = Qt::UserRole + 13;
+constexpr int kComponentOptionPriceRole = Qt::UserRole + 14;
+constexpr int kInventoryOptionCategoryRole = Qt::UserRole + 20;
+constexpr int kInventoryOptionSpecRole = Qt::UserRole + 21;
+constexpr int kInventoryOptionMaterialRole = Qt::UserRole + 22;
+constexpr int kInventoryOptionColorRole = Qt::UserRole + 23;
+constexpr int kInventoryOptionUnitRole = Qt::UserRole + 24;
+constexpr int kInventoryOptionPriceRole = Qt::UserRole + 25;
+constexpr int kInventoryOptionCurrentQuantityRole = Qt::UserRole + 26;
+constexpr int kInventoryOptionNoteRole = Qt::UserRole + 27;
 
 QString structuredSourceDisplayText(const QString &sourceType)
 {
@@ -293,6 +368,17 @@ QString inventoryOptionDisplayText(const ProductComponentOption &option,
     return text;
 }
 
+QString productSkuIdentityKey(int productCategoryId,
+                              const QString &skuName,
+                              const QString &lampshadeName,
+                              double lampshadeUnitPrice)
+{
+    return QString::number(productCategoryId) + QLatin1Char('\x1f')
+           + skuName.trimmed() + QLatin1Char('\x1f')
+           + lampshadeName.trimmed() + QLatin1Char('\x1f')
+           + QString::number(lampshadeUnitPrice, 'f', 4);
+}
+
 QString shipmentOrderDisplayText(const ShipmentOrderSummary &order)
 {
     return QStringLiteral("#%1 | %2 | %3 | %4 | %5 | %6")
@@ -303,7 +389,7 @@ QString shipmentOrderDisplayText(const ShipmentOrderSummary &order)
         .arg(order.configurationName)
         .arg(order.isCompleted
                  ? QStringLiteral("已发")
-                 : QStringLiteral("机体未发 %1 套 | 可整套发 %2 套")
+                 : QStringLiteral("机体待发 %1 套 | 待发 %2 套")
                        .arg(order.unshippedSets)
                        .arg(order.availableSetShipments));
 }
@@ -318,7 +404,7 @@ QString structuredShipmentOrderDisplayText(const StructuredOrderSummary &order)
         .arg(order.baseConfigurationName)
         .arg(order.isCompleted
                  ? QStringLiteral("已发")
-                 : QStringLiteral("可整套发 %1 套").arg(order.availableSetShipments));
+                 : QStringLiteral("待发 %1 套").arg(order.availableSetShipments));
 }
 
 QString structuredOrderShipmentStatusText(const StructuredOrderSummary &order)
@@ -334,7 +420,10 @@ QString structuredOrderShipmentStatusText(const StructuredOrderSummary &order)
 
 QString structuredOrderReadinessText(const StructuredOrderSummary &order)
 {
-    return order.shipmentReady ? QStringLiteral("可发货") : QStringLiteral("不可发货");
+    if (!order.isCompleted && !order.shipmentReady) {
+        return QStringLiteral("不可发货");
+    }
+    return order.remark.trimmed();
 }
 }
 
@@ -354,6 +443,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupProductDataTab();
     setupInventoryTab();
     setupStructuredOrderUi();
+    updateResponsiveTableColumnWidths();
     ui->mainTabWidget->setCurrentWidget(ui->orderEntryTab);
     clearAllDatabaseViews();
     applyDatabaseOpenState(false);
@@ -472,9 +562,6 @@ MainWindow::MainWindow(QWidget *parent)
                 &QPushButton::clicked,
                 this,
                 &MainWindow::exportCurrentOrderShipmentCsv);
-    }
-    if (m_printCurrentOrderButton != nullptr) {
-        connect(m_printCurrentOrderButton, &QPushButton::clicked, this, &MainWindow::printCurrentOrder);
     }
     connect(ui->queryResetButton,
             &QPushButton::clicked,
@@ -629,7 +716,8 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUiState()
 {
-    setMinimumSize(1180, 860);
+    resize(1460, 920);
+    setMinimumSize(1320, 860);
     ui->menubar->hide();
     ui->mainTabWidget->setDocumentMode(true);
     ui->verticalLayout->setSpacing(0);
@@ -803,7 +891,7 @@ void MainWindow::setupUiState()
          QStringLiteral("套数"),
          QStringLiteral("配置价格"),
          QStringLiteral("订单状态"),
-         QStringLiteral("可发货")});
+         QStringLiteral("备注")});
     ui->orderListTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->orderListTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     ui->orderListTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -819,7 +907,8 @@ void MainWindow::setupUiState()
     configurePreferredColumn(ui->orderListTableWidget, kQueryOrderQuantitySetsColumn, 88);
     configurePreferredColumn(ui->orderListTableWidget, kQueryOrderUnitPriceColumn, 96);
     configurePreferredColumn(ui->orderListTableWidget, kQueryOrderStatusColumn, 104);
-    configurePreferredColumn(ui->orderListTableWidget, kQueryOrderShipmentReadyColumn, 96);
+    ui->orderListTableWidget->horizontalHeader()->setSectionResizeMode(
+        kQueryOrderShipmentReadyColumn, QHeaderView::Stretch);
     configureTableWidget(ui->orderListTableWidget);
 
     ui->orderDetailComponentTableWidget->setColumnCount(8);
@@ -847,10 +936,11 @@ void MainWindow::setupUiState()
     configurePreferredColumn(ui->orderDetailComponentTableWidget, kQueryDetailSourceColumn, 118);
     configureTableWidget(ui->orderDetailComponentTableWidget);
 
-    ui->orderShipmentHistoryTableWidget->setColumnCount(4);
+    ui->orderShipmentHistoryTableWidget->setColumnCount(5);
     ui->orderShipmentHistoryTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("时间"),
          QStringLiteral("类型"),
+         QStringLiteral("组件"),
          QStringLiteral("数量"),
          QStringLiteral("备注")});
     ui->orderShipmentHistoryTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -859,6 +949,7 @@ void MainWindow::setupUiState()
     ui->orderShipmentHistoryTableWidget->horizontalHeader()->setStretchLastSection(true);
     configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentDateColumn, 136);
     configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentTypeColumn, 112);
+    configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentComponentColumn, 160);
     configurePreferredColumn(ui->orderShipmentHistoryTableWidget, kQueryShipmentQuantityColumn, 88);
     configureTableWidget(ui->orderShipmentHistoryTableWidget);
 
@@ -880,6 +971,12 @@ void MainWindow::setupUiState()
         queryListPageLayout->setContentsMargins(0, 0, 0, 0);
         queryListPageLayout->setSpacing(16);
         queryListPageLayout->addWidget(ui->orderListTableWidget);
+        if (m_exportOrderSummaryButton != nullptr) {
+            auto *queryListButtonLayout = new QHBoxLayout();
+            queryListButtonLayout->addStretch();
+            queryListButtonLayout->addWidget(m_exportOrderSummaryButton);
+            queryListPageLayout->addLayout(queryListButtonLayout);
+        }
 
         auto *queryDetailPage = new QWidget(m_queryModeTabWidget);
         auto *queryDetailPageLayout = new QVBoxLayout(queryDetailPage);
@@ -887,6 +984,12 @@ void MainWindow::setupUiState()
         queryDetailPageLayout->setSpacing(16);
         queryDetailPageLayout->addWidget(ui->orderDetailSplitter);
         ui->orderDetailSplitter->setSizes({1, 1});
+        if (ui->orderShipmentHistoryLayout != nullptr && m_exportShipmentListButton != nullptr) {
+            auto *queryDetailButtonLayout = new QHBoxLayout();
+            queryDetailButtonLayout->addStretch();
+            queryDetailButtonLayout->addWidget(m_exportShipmentListButton);
+            ui->orderShipmentHistoryLayout->addLayout(queryDetailButtonLayout);
+        }
 
         m_queryModeTabWidget->addTab(queryListPage, QStringLiteral("订单查询"));
         m_queryModeTabWidget->addTab(queryDetailPage, QStringLiteral("订单详情"));
@@ -946,7 +1049,14 @@ void MainWindow::changeEvent(QEvent *event)
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) {
         updateWindowControlButtons();
+        updateResponsiveTableColumnWidths();
     }
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    updateResponsiveTableColumnWidths();
 }
 
 void MainWindow::setupCustomTitleBar()
@@ -1381,8 +1491,14 @@ void MainWindow::applyDatabaseOpenState(bool isOpen)
     if (m_inventoryUnitPriceSpinBox != nullptr) {
         m_inventoryUnitPriceSpinBox->setEnabled(isOpen);
     }
-    if (m_inventoryQuantitySpinBox != nullptr) {
-        m_inventoryQuantitySpinBox->setEnabled(isOpen);
+    if (m_inventoryCurrentQuantityLineEdit != nullptr) {
+        m_inventoryCurrentQuantityLineEdit->setEnabled(isOpen);
+    }
+    if (m_inventoryInboundQuantitySpinBox != nullptr) {
+        m_inventoryInboundQuantitySpinBox->setEnabled(isOpen);
+    }
+    if (m_inventoryOutboundQuantitySpinBox != nullptr) {
+        m_inventoryOutboundQuantitySpinBox->setEnabled(isOpen);
     }
     if (m_inventoryNoteLineEdit != nullptr) {
         m_inventoryNoteLineEdit->setEnabled(isOpen);
@@ -1419,9 +1535,6 @@ void MainWindow::applyDatabaseOpenState(bool isOpen)
     }
     if (m_exportShipmentListButton != nullptr) {
         m_exportShipmentListButton->setEnabled(isOpen);
-    }
-    if (m_printCurrentOrderButton != nullptr) {
-        m_printCurrentOrderButton->setEnabled(isOpen);
     }
 }
 
@@ -1836,6 +1949,8 @@ void MainWindow::configureTableWidget(QTableWidget *tableWidget) const
     tableWidget->horizontalHeader()->setSectionsClickable(true);
     tableWidget->horizontalHeader()->setSortIndicatorShown(true);
     tableWidget->setSortingEnabled(true);
+    tableWidget->setStyleSheet(tableWidget->styleSheet()
+                               + QStringLiteral("QTableView { padding-bottom: 24px; }"));
 }
 
 void MainWindow::setupProductDataTab()
@@ -1852,7 +1967,7 @@ void MainWindow::setupProductDataTab()
     m_productDataMenuListWidget = new QListWidget(m_productDataTab);
     m_productDataMenuListWidget->addItems({QStringLiteral("产品类型"),
                                            QStringLiteral("具体型号"),
-                                           QStringLiteral("基础配置价格"),
+                                           QStringLiteral("基础配置"),
                                            QStringLiteral("基础配置 BOM")});
     m_productDataMenuListWidget->setFixedWidth(180);
     rootLayout->addWidget(m_productDataMenuListWidget);
@@ -2100,8 +2215,14 @@ void MainWindow::setupInventoryTab()
     inventoryFormLayout->addWidget(new QLabel(QStringLiteral("物料名称"), inventoryGroup), 0, 2);
     m_inventoryComponentComboBox = new QComboBox(inventoryGroup);
     inventoryFormLayout->addWidget(m_inventoryComponentComboBox, 0, 3);
+    inventoryFormLayout->setColumnStretch(1, 1);
+    inventoryFormLayout->setColumnStretch(3, 3);
     enableComboBoxFiltering(m_inventoryCategoryComboBox);
     enableComboBoxFiltering(m_inventoryComponentComboBox);
+    m_inventoryCategoryComboBox->setMinimumContentsLength(14);
+    m_inventoryComponentComboBox->setMinimumContentsLength(40);
+    m_inventoryComponentComboBox->setSizeAdjustPolicy(
+        QComboBox::AdjustToMinimumContentsLengthWithIcon);
     inventoryFormLayout->addWidget(new QLabel(QStringLiteral("规格"), inventoryGroup), 1, 0);
     m_inventoryComponentSpecLineEdit = new QLineEdit(inventoryGroup);
     inventoryFormLayout->addWidget(m_inventoryComponentSpecLineEdit, 1, 1);
@@ -2120,14 +2241,23 @@ void MainWindow::setupInventoryTab()
     m_inventoryUnitPriceSpinBox->setMaximum(9999999.99);
     m_inventoryUnitPriceSpinBox->setDecimals(2);
     inventoryFormLayout->addWidget(m_inventoryUnitPriceSpinBox, 3, 1);
-    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("库存数量"), inventoryGroup), 3, 2);
-    m_inventoryQuantitySpinBox = new QSpinBox(inventoryGroup);
-    m_inventoryQuantitySpinBox->setMinimum(0);
-    m_inventoryQuantitySpinBox->setMaximum(999999999);
-    inventoryFormLayout->addWidget(m_inventoryQuantitySpinBox, 3, 3);
-    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("备注"), inventoryGroup), 4, 0);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("当前库存"), inventoryGroup), 3, 2);
+    m_inventoryCurrentQuantityLineEdit = new QLineEdit(inventoryGroup);
+    m_inventoryCurrentQuantityLineEdit->setReadOnly(true);
+    inventoryFormLayout->addWidget(m_inventoryCurrentQuantityLineEdit, 3, 3);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("本次入库"), inventoryGroup), 4, 0);
+    m_inventoryInboundQuantitySpinBox = new QSpinBox(inventoryGroup);
+    m_inventoryInboundQuantitySpinBox->setMinimum(0);
+    m_inventoryInboundQuantitySpinBox->setMaximum(999999999);
+    inventoryFormLayout->addWidget(m_inventoryInboundQuantitySpinBox, 4, 1);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("本次出库"), inventoryGroup), 4, 2);
+    m_inventoryOutboundQuantitySpinBox = new QSpinBox(inventoryGroup);
+    m_inventoryOutboundQuantitySpinBox->setMinimum(0);
+    m_inventoryOutboundQuantitySpinBox->setMaximum(999999999);
+    inventoryFormLayout->addWidget(m_inventoryOutboundQuantitySpinBox, 4, 3);
+    inventoryFormLayout->addWidget(new QLabel(QStringLiteral("备注"), inventoryGroup), 5, 0);
     m_inventoryNoteLineEdit = new QLineEdit(inventoryGroup);
-    inventoryFormLayout->addWidget(m_inventoryNoteLineEdit, 4, 1, 1, 3);
+    inventoryFormLayout->addWidget(m_inventoryNoteLineEdit, 5, 1, 1, 3);
     inventoryLayout->addLayout(inventoryFormLayout);
 
     auto *inventoryButtonLayout = new QHBoxLayout();
@@ -2147,7 +2277,7 @@ void MainWindow::setupInventoryTab()
     auto *inventoryListGroup = new QGroupBox(QStringLiteral("库存列表"), m_inventoryTab);
     auto *inventoryListLayout = new QVBoxLayout(inventoryListGroup);
     m_inventoryTableWidget = new QTableWidget(inventoryListGroup);
-    m_inventoryTableWidget->setColumnCount(10);
+    m_inventoryTableWidget->setColumnCount(12);
     m_inventoryTableWidget->setHorizontalHeaderLabels(
         {QStringLiteral("ID"),
          QStringLiteral("适用类型"),
@@ -2157,25 +2287,16 @@ void MainWindow::setupInventoryTab()
          QStringLiteral("颜色"),
          QStringLiteral("单位"),
          QStringLiteral("默认单价"),
-         QStringLiteral("库存"),
+         QStringLiteral("当前库存"),
+         QStringLiteral("累计入库"),
+         QStringLiteral("累计出库"),
          QStringLiteral("备注")});
     configureTableWidget(m_inventoryTableWidget);
     m_inventoryTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_inventoryTableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    configureFixedIdColumn(m_inventoryTableWidget, kInventoryListIdColumn, 88);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListCategoryColumn, 112);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListNameColumn,
-                                                                     QHeaderView::Stretch);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListSpecColumn, 150);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListMaterialColumn, 108);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListColorColumn, 96);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListUnitColumn, 76);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListUnitPriceColumn, 96);
-    configurePreferredColumn(m_inventoryTableWidget, kInventoryListQuantityColumn, 88);
-    m_inventoryTableWidget->horizontalHeader()->setSectionResizeMode(kInventoryListNoteColumn,
-                                                                     QHeaderView::Stretch);
     inventoryListLayout->addWidget(m_inventoryTableWidget);
+    updateResponsiveTableColumnWidths();
     inventoryEntryPageLayout->addWidget(inventoryListGroup);
 
     auto *blockedOrderGroup = new QGroupBox(QStringLiteral("缺货订单"), inventoryOrderInfoPage);
@@ -2189,7 +2310,7 @@ void MainWindow::setupInventoryTab()
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
-         QStringLiteral("状态")});
+         QStringLiteral("备注")});
     configureTableWidget(m_inventoryBlockedOrderTableWidget);
     m_inventoryBlockedOrderTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryBlockedOrderTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -2202,7 +2323,8 @@ void MainWindow::setupInventoryTab()
                                                                                  QHeaderView::Stretch);
     configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderConfigurationColumn, 112);
     configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderQuantityColumn, 88);
-    configurePreferredColumn(m_inventoryBlockedOrderTableWidget, kReadyOrderStatusColumn, 96);
+    m_inventoryBlockedOrderTableWidget->horizontalHeader()->setSectionResizeMode(
+        kReadyOrderStatusColumn, QHeaderView::Stretch);
     blockedOrderLayout->addWidget(m_inventoryBlockedOrderTableWidget);
 
     auto *demandGroup = new QGroupBox(QStringLiteral("订单汇总需求"), inventoryDemandPage);
@@ -2255,7 +2377,7 @@ void MainWindow::setupInventoryTab()
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
-         QStringLiteral("状态")});
+         QStringLiteral("备注")});
     configureTableWidget(m_inventoryReadyOrderTableWidget);
     m_inventoryReadyOrderTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_inventoryReadyOrderTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -2268,7 +2390,8 @@ void MainWindow::setupInventoryTab()
                                                                                QHeaderView::Stretch);
     configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderConfigurationColumn, 112);
     configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderQuantityColumn, 88);
-    configurePreferredColumn(m_inventoryReadyOrderTableWidget, kReadyOrderStatusColumn, 96);
+    m_inventoryReadyOrderTableWidget->horizontalHeader()->setSectionResizeMode(
+        kReadyOrderStatusColumn, QHeaderView::Stretch);
     readyOrderLayout->addWidget(m_inventoryReadyOrderTableWidget);
 
     inventoryDemandPageLayout->addWidget(demandGroup);
@@ -2314,7 +2437,7 @@ void MainWindow::setupInventoryTab()
          QStringLiteral("具体型号"),
          QStringLiteral("基础配置"),
          QStringLiteral("套数"),
-         QStringLiteral("状态")});
+         QStringLiteral("备注")});
     configureTableWidget(m_structuredShipmentReadyTableWidget);
     m_structuredShipmentReadyTableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_structuredShipmentReadyTableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -2327,7 +2450,8 @@ void MainWindow::setupInventoryTab()
                                                                                    QHeaderView::Stretch);
     configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderConfigurationColumn, 112);
     configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderQuantityColumn, 88);
-    configurePreferredColumn(m_structuredShipmentReadyTableWidget, kReadyOrderStatusColumn, 96);
+    m_structuredShipmentReadyTableWidget->horizontalHeader()->setSectionResizeMode(
+        kReadyOrderStatusColumn, QHeaderView::Stretch);
     structuredShipmentReadyLayout->addWidget(m_structuredShipmentReadyTableWidget);
 
     if (ui->shipmentLayout != nullptr) {
@@ -2391,8 +2515,16 @@ void MainWindow::setupInventoryTab()
                         ? m_inventoryTableWidget->item(row, kInventoryListUnitPriceColumn)->text().toDouble()
                         : 0.0;
                 item.currentQuantity =
-                    m_inventoryTableWidget->item(row, kInventoryListQuantityColumn) != nullptr
-                        ? m_inventoryTableWidget->item(row, kInventoryListQuantityColumn)->text().toInt()
+                    m_inventoryTableWidget->item(row, kInventoryListCurrentQuantityColumn) != nullptr
+                        ? m_inventoryTableWidget->item(row, kInventoryListCurrentQuantityColumn)->text().toInt()
+                        : 0;
+                item.inboundQuantity =
+                    m_inventoryTableWidget->item(row, kInventoryListInboundQuantityColumn) != nullptr
+                        ? m_inventoryTableWidget->item(row, kInventoryListInboundQuantityColumn)->text().toInt()
+                        : 0;
+                item.outboundQuantity =
+                    m_inventoryTableWidget->item(row, kInventoryListOutboundQuantityColumn) != nullptr
+                        ? m_inventoryTableWidget->item(row, kInventoryListOutboundQuantityColumn)->text().toInt()
                         : 0;
                 item.note =
                     m_inventoryTableWidget->item(row, kInventoryListNoteColumn) != nullptr
@@ -2450,29 +2582,51 @@ void MainWindow::setupInventoryTab()
                 if (optionId <= 0) {
                     return;
                 }
-                for (const InventoryItemData &item : m_databaseManager.inventoryItems()) {
-                    if (item.id == optionId) {
-                        m_inventoryComponentComboBox->setProperty("inventoryItemId", item.id);
-                        if (m_inventoryCategoryComboBox != nullptr && item.productCategoryId > 0) {
-                            const int categoryIndex =
-                                m_inventoryCategoryComboBox->findData(item.productCategoryId);
-                            if (categoryIndex >= 0) {
-                                m_inventoryCategoryComboBox->setCurrentIndex(categoryIndex);
-                            }
-                        }
-                        m_inventoryComponentSpecLineEdit->setText(item.componentSpec);
-                        m_inventoryMaterialLineEdit->setText(item.material);
-                        m_inventoryColorLineEdit->setText(item.color);
-                        m_inventoryUnitLineEdit->setText(item.unitName);
-                        if (m_inventoryUnitPriceSpinBox != nullptr) {
-                            m_inventoryUnitPriceSpinBox->setValue(item.unitPrice);
-                        }
-                        m_inventoryQuantitySpinBox->setValue(item.currentQuantity);
-                        if (m_inventoryNoteLineEdit != nullptr) {
-                            m_inventoryNoteLineEdit->setText(item.note);
-                        }
-                        break;
+                m_inventoryComponentComboBox->setProperty("inventoryItemId", optionId);
+                const int productCategoryId =
+                    m_inventoryComponentComboBox->itemData(index, kInventoryOptionCategoryRole).toInt();
+                if (m_inventoryCategoryComboBox != nullptr && productCategoryId > 0) {
+                    const int categoryIndex = m_inventoryCategoryComboBox->findData(productCategoryId);
+                    if (categoryIndex >= 0) {
+                        m_inventoryCategoryComboBox->setCurrentIndex(categoryIndex);
                     }
+                }
+                if (m_inventoryComponentSpecLineEdit != nullptr) {
+                    m_inventoryComponentSpecLineEdit->setText(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionSpecRole).toString());
+                }
+                if (m_inventoryMaterialLineEdit != nullptr) {
+                    m_inventoryMaterialLineEdit->setText(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionMaterialRole).toString());
+                }
+                if (m_inventoryColorLineEdit != nullptr) {
+                    m_inventoryColorLineEdit->setText(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionColorRole).toString());
+                }
+                if (m_inventoryUnitLineEdit != nullptr) {
+                    m_inventoryUnitLineEdit->setText(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionUnitRole).toString());
+                }
+                if (m_inventoryUnitPriceSpinBox != nullptr) {
+                    m_inventoryUnitPriceSpinBox->setValue(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionPriceRole).toDouble());
+                }
+                if (m_inventoryCurrentQuantityLineEdit != nullptr) {
+                    m_inventoryCurrentQuantityLineEdit->setText(
+                        QString::number(
+                            m_inventoryComponentComboBox
+                                ->itemData(index, kInventoryOptionCurrentQuantityRole)
+                                .toInt()));
+                }
+                if (m_inventoryNoteLineEdit != nullptr) {
+                    m_inventoryNoteLineEdit->setText(
+                        m_inventoryComponentComboBox->itemData(index, kInventoryOptionNoteRole).toString());
+                }
+                if (m_inventoryInboundQuantitySpinBox != nullptr) {
+                    m_inventoryInboundQuantitySpinBox->setValue(0);
+                }
+                if (m_inventoryOutboundQuantitySpinBox != nullptr) {
+                    m_inventoryOutboundQuantitySpinBox->setValue(0);
                 }
             });
     connect(m_inventoryComponentComboBox,
@@ -2570,18 +2724,92 @@ QComboBox *MainWindow::createInventoryComponentComboBox(int productCategoryId, Q
 
     const QList<ProductComponentOption> options =
         m_databaseManager.inventoryComponentOptions(productCategoryId);
-    QHash<QString, QSet<QString>> priceVariantsByIdentity;
     for (const ProductComponentOption &option : options) {
-        priceVariantsByIdentity[inventoryOptionIdentityKey(option)].insert(
-            QString::number(option.unitPrice, 'f', 4));
-    }
-
-    for (const ProductComponentOption &option : options) {
-        comboBox->addItem(inventoryOptionDisplayText(option, priceVariantsByIdentity), option.id);
-        comboBox->setItemData(comboBox->count() - 1, option.unitPrice, Qt::UserRole + 1);
+        comboBox->addItem(inventoryOptionBaseText(option), option.id);
+        const int index = comboBox->count() - 1;
+        comboBox->setItemData(index, option.componentSpec, kComponentOptionSpecRole);
+        comboBox->setItemData(index, option.material, kComponentOptionMaterialRole);
+        comboBox->setItemData(index, option.color, kComponentOptionColorRole);
+        comboBox->setItemData(index, option.unitName, kComponentOptionUnitRole);
+        comboBox->setItemData(index, option.unitPrice, kComponentOptionPriceRole);
     }
 
     enableComboBoxFiltering(comboBox);
+    comboBox->setMinimumContentsLength(0);
+    comboBox->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    comboBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    comboBox->setMaxVisibleItems(16);
+    comboBox->setContentsMargins(0, 0, 0, 0);
+    comboBox->setStyleSheet(QStringLiteral(
+        "QComboBox {"
+        " margin: 0px;"
+        " padding: 0px 24px 0px 8px;"
+        " border: 1px solid #d7dbe0;"
+        " border-radius: 6px;"
+        " background-color: #ffffff;"
+        " color: #1f2328;"
+        "}"
+        "QComboBox:hover {"
+        " border: 1px solid #b9c1ca;"
+        "}"
+        "QComboBox:focus {"
+        " border: 1px solid #d2a74a;"
+        "}"
+        "QComboBox:on {"
+        " background-color: #ffffff;"
+        "}"
+        "QComboBox::drop-down {"
+        " width: 22px;"
+        " border: none;"
+        " subcontrol-origin: padding;"
+        " subcontrol-position: center right;"
+        "}"
+        "QComboBox::down-arrow {"
+        " image: url(:/icons/chevron-down.svg);"
+        " width: 10px;"
+        " height: 10px;"
+        " margin-right: 6px;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        " background-color: #ffffff;"
+        " color: #1f2328;"
+        " border: 1px solid #d7dbe0;"
+        " outline: 0;"
+        " padding: 4px 0px;"
+        " selection-background-color: #eef3f8;"
+        " selection-color: #1f2328;"
+        "}"
+        "QComboBox QAbstractItemView::item {"
+        " min-height: 28px;"
+        " padding: 0px 8px;"
+        "}"));
+
+    if (QLineEdit *lineEdit = comboBox->lineEdit()) {
+        lineEdit->setFrame(false);
+        lineEdit->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        lineEdit->setTextMargins(0, 0, 0, 0);
+        lineEdit->setStyleSheet(QStringLiteral(
+            "QLineEdit {"
+            " border: none;"
+            " background: transparent;"
+            " padding: 0px;"
+            " margin: 0px;"
+            " color: #1f2328;"
+            "}"));
+    }
+
+    if (auto *tableWidget = qobject_cast<QTableWidget *>(parent)) {
+        const int rowHeight = tableWidget->verticalHeader() != nullptr
+                                  ? tableWidget->verticalHeader()->defaultSectionSize()
+                                  : tableWidget->fontMetrics().height() + 12;
+        comboBox->setFixedHeight(qMax(32, rowHeight - 2));
+    }
+
+    if (QListView *listView = qobject_cast<QListView *>(comboBox->view())) {
+        listView->setWordWrap(false);
+    }
+    comboBox->view()->setTextElideMode(Qt::ElideRight);
+    refreshComboBoxPopupWidth(comboBox);
     return comboBox;
 }
 
@@ -2670,6 +2898,9 @@ void MainWindow::loadStructuredOrderSkus()
         const QSignalBlocker blocker(m_structuredCategoryComboBox);
         m_structuredCategoryComboBox->clear();
         for (const ProductCategoryOption &category : categories) {
+            if (category.name.trimmed() == QStringLiteral("通用")) {
+                continue;
+            }
             m_structuredCategoryComboBox->addItem(category.name, category.id);
         }
         int targetIndex = m_structuredCategoryComboBox->findData(previousCategoryId);
@@ -2920,76 +3151,146 @@ void MainWindow::addStructuredComponentRow()
     ui->componentTableWidget->setItem(row, kTotalRequiredColumn, requiredItem);
     ui->componentTableWidget->setItem(row, kComponentTotalPriceColumn, lineAmountItem);
 
+    const int defaultRowHeight = ui->componentTableWidget->verticalHeader() != nullptr
+                                     ? ui->componentTableWidget->verticalHeader()->defaultSectionSize()
+                                     : 34;
+    const int editingRowHeight = qMax(defaultRowHeight + 10, 44);
+    ui->componentTableWidget->setRowHeight(row, editingRowHeight);
+
+    auto *componentCellContainer = new QWidget(ui->componentTableWidget);
+    componentCellContainer->setContentsMargins(0, 0, 0, 0);
+    auto *componentCellLayout = new QHBoxLayout(componentCellContainer);
+    componentCellLayout->setContentsMargins(2, 2, 2, 2);
+    componentCellLayout->setSpacing(0);
+
     QComboBox *componentComboBox =
         createInventoryComponentComboBox(currentStructuredProductCategoryId(), ui->componentTableWidget);
+    componentCellLayout->addWidget(componentComboBox);
     componentComboBox->installEventFilter(this);
     if (componentComboBox->lineEdit() != nullptr) {
         componentComboBox->lineEdit()->installEventFilter(this);
     }
-    ui->componentTableWidget->setCellWidget(row, kComponentNameColumn, componentComboBox);
+    componentCellContainer->installEventFilter(this);
+    ui->componentTableWidget->setCellWidget(row, kComponentNameColumn, componentCellContainer);
+    const auto finalizeComponentSelectionPresentation = [this, defaultRowHeight](int row) {
+        if (row < 0 || ui == nullptr || ui->componentTableWidget == nullptr
+            || row >= ui->componentTableWidget->rowCount()) {
+            return;
+        }
+
+        if (QWidget *cellWidget = ui->componentTableWidget->cellWidget(row, kComponentNameColumn)) {
+            ui->componentTableWidget->removeCellWidget(row, kComponentNameColumn);
+            cellWidget->deleteLater();
+        }
+        ui->componentTableWidget->setRowHeight(row, defaultRowHeight);
+    };
+    const auto applyComponentSelection = [this, componentComboBox](int index) {
+        if (m_updatingComponentTable || componentComboBox == nullptr || index < 0) {
+            return;
+        }
+
+        const int row = structuredComponentRowForWidget(componentComboBox);
+        if (row < 0) {
+            return;
+        }
+
+        const int optionId = componentComboBox->itemData(index).toInt();
+        if (index == 0) {
+            if (QTableWidgetItem *nameItem =
+                    ui->componentTableWidget->item(row, kComponentNameColumn)) {
+                nameItem->setText(componentComboBox->currentText().section('|', 0, 0).trimmed());
+                nameItem->setData(Qt::UserRole, 0);
+                nameItem->setData(Qt::UserRole + 1, QStringLiteral("extra"));
+            }
+            if (QTableWidgetItem *specItem =
+                    ui->componentTableWidget->item(row, kComponentSpecColumn)) {
+                specItem->setText(QString());
+            }
+            if (QTableWidgetItem *materialItem =
+                    ui->componentTableWidget->item(row, kComponentMaterialColumn)) {
+                materialItem->setText(QString());
+            }
+            if (QTableWidgetItem *colorItem =
+                    ui->componentTableWidget->item(row, kComponentColorColumn)) {
+                colorItem->setText(QString());
+            }
+            if (QTableWidgetItem *unitItem =
+                    ui->componentTableWidget->item(row, kComponentUnitColumn)) {
+                unitItem->setText(QStringLiteral("件"));
+            }
+            if (QTableWidgetItem *priceItem =
+                    ui->componentTableWidget->item(row, kUnitPriceColumn)) {
+                priceItem->setText(QString::number(kDefaultNonZeroUnitPrice, 'f', 2));
+            }
+            updateStructuredComponentTotals();
+            return;
+        }
+
+        ProductComponentOption option;
+        option.id = optionId;
+        option.name = componentComboBox->itemText(index).section('|', 0, 0).trimmed();
+        option.componentSpec =
+            componentComboBox->itemData(index, kComponentOptionSpecRole).toString();
+        option.material =
+            componentComboBox->itemData(index, kComponentOptionMaterialRole).toString();
+        option.color =
+            componentComboBox->itemData(index, kComponentOptionColorRole).toString();
+        option.unitName =
+            componentComboBox->itemData(index, kComponentOptionUnitRole).toString();
+        option.unitPrice =
+            componentComboBox->itemData(index, kComponentOptionPriceRole).toDouble();
+        populateStructuredRowFromOption(row, option);
+    };
     connect(componentComboBox,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
-            [this, componentComboBox](int index) {
-                if (m_updatingComponentTable || componentComboBox == nullptr || index < 0) {
+            applyComponentSelection);
+    connect(componentComboBox,
+            &QComboBox::editTextChanged,
+            this,
+            [this, componentComboBox, applyComponentSelection](const QString &text) {
+                if (m_updatingComponentTable || componentComboBox == nullptr) {
                     return;
                 }
 
-                int row = -1;
-                for (int currentRow = 0; currentRow < ui->componentTableWidget->rowCount(); ++currentRow) {
-                    if (ui->componentTableWidget->cellWidget(currentRow, kComponentNameColumn)
-                        == componentComboBox) {
-                        row = currentRow;
-                        break;
-                    }
-                }
-                if (row < 0) {
-                    return;
-                }
-                const int optionId = componentComboBox->itemData(index).toInt();
-                if (optionId <= 0) {
-                    if (QTableWidgetItem *nameItem =
-                            ui->componentTableWidget->item(row, kComponentNameColumn)) {
-                        nameItem->setText(componentComboBox->currentText().section('|', 0, 0).trimmed());
-                        nameItem->setData(Qt::UserRole, 0);
-                        nameItem->setData(Qt::UserRole + 1, QStringLiteral("extra"));
-                    }
-                    if (QTableWidgetItem *specItem =
-                            ui->componentTableWidget->item(row, kComponentSpecColumn)) {
-                        specItem->setText(QString());
-                    }
-                    if (QTableWidgetItem *materialItem =
-                            ui->componentTableWidget->item(row, kComponentMaterialColumn)) {
-                        materialItem->setText(QString());
-                    }
-                    if (QTableWidgetItem *colorItem =
-                            ui->componentTableWidget->item(row, kComponentColorColumn)) {
-                        colorItem->setText(QString());
-                    }
-                    if (QTableWidgetItem *unitItem =
-                            ui->componentTableWidget->item(row, kComponentUnitColumn)) {
-                        unitItem->setText(QStringLiteral("件"));
-                    }
-                    if (QTableWidgetItem *priceItem =
-                            ui->componentTableWidget->item(row, kUnitPriceColumn)) {
-                        priceItem->setText(QString::number(kDefaultNonZeroUnitPrice, 'f', 2));
-                    }
-                    updateStructuredComponentTotals();
+                const QString trimmedText = text.trimmed();
+                if (trimmedText.isEmpty()) {
+                    applyComponentSelection(0);
                     return;
                 }
 
-                for (const ProductComponentOption &option :
-                     m_databaseManager.inventoryComponentOptions(currentStructuredProductCategoryId())) {
-                    if (option.id == optionId) {
-                        populateStructuredRowFromOption(row, option);
-                        break;
-                    }
+                int matchedIndex = componentComboBox->findText(trimmedText, Qt::MatchExactly);
+                if (matchedIndex < 0) {
+                    const QString baseText = trimmedText.section('|', 0, 1).trimmed();
+                    matchedIndex = componentComboBox->findText(baseText, Qt::MatchExactly);
                 }
+                if (matchedIndex < 0) {
+                    return;
+                }
+
+                if (componentComboBox->currentIndex() != matchedIndex) {
+                    const QSignalBlocker blocker(componentComboBox);
+                    componentComboBox->setCurrentIndex(matchedIndex);
+                }
+                applyComponentSelection(matchedIndex);
+            });
+    connect(componentComboBox,
+            qOverload<int>(&QComboBox::activated),
+            this,
+            [this, applyComponentSelection, finalizeComponentSelectionPresentation](int index) {
+                if (index <= 0) {
+                    return;
+                }
+
+                applyComponentSelection(index);
+                const int row = structuredComponentRowForWidget(qobject_cast<QWidget *>(sender()));
+                finalizeComponentSelectionPresentation(row);
             });
 
     m_updatingComponentTable = false;
     updateStructuredComponentTotals();
     componentComboBox->setFocus();
+    componentComboBox->showPopup();
 }
 
 void MainWindow::markStructuredRowAdjusted(int row, int column)
@@ -3136,6 +3437,9 @@ void MainWindow::loadCategoryEditor()
     const QSignalBlocker blocker(m_categoryTableWidget);
     m_categoryTableWidget->setRowCount(0);
     for (const ProductCategoryOption &category : m_databaseManager.productCategories()) {
+        if (category.name.trimmed() == QStringLiteral("通用")) {
+            continue;
+        }
         const int row = m_categoryTableWidget->rowCount();
         m_categoryTableWidget->insertRow(row);
         auto *idItem = new QTableWidgetItem(QString::number(category.id));
@@ -3160,6 +3464,12 @@ void MainWindow::saveCategoryEditor()
         const QTableWidgetItem *idItem = m_categoryTableWidget->item(row, kCategoryEditorIdColumn);
         category.id = idItem != nullptr ? idItem->text().toInt() : 0;
         category.name = nameItem->text().trimmed();
+        if (category.name == QStringLiteral("通用")) {
+            QMessageBox::warning(this,
+                                 QStringLiteral("保存失败"),
+                                 QStringLiteral("“通用”仅用于库存录入，不在产品资料维护中维护。"));
+            return;
+        }
         if (!m_databaseManager.saveProductCategory(category)) {
             QMessageBox::critical(this, QStringLiteral("保存失败"), m_databaseManager.lastError());
             return;
@@ -3192,6 +3502,9 @@ void MainWindow::refreshManagementCategorySelectors()
         const int currentId = m_skuCategoryComboBox->currentData().toInt();
         m_skuCategoryComboBox->clear();
         for (const ProductCategoryOption &category : categories) {
+            if (category.name.trimmed() == QStringLiteral("通用")) {
+                continue;
+            }
             m_skuCategoryComboBox->addItem(category.name, category.id);
         }
         int targetIndex = m_skuCategoryComboBox->findData(currentId);
@@ -3208,6 +3521,9 @@ void MainWindow::refreshManagementCategorySelectors()
         const int currentId = m_configurationCategoryComboBox->currentData().toInt();
         m_configurationCategoryComboBox->clear();
         for (const ProductCategoryOption &category : categories) {
+            if (category.name.trimmed() == QStringLiteral("通用")) {
+                continue;
+            }
             m_configurationCategoryComboBox->addItem(category.name, category.id);
         }
         int targetIndex = m_configurationCategoryComboBox->findData(currentId);
@@ -3224,6 +3540,9 @@ void MainWindow::refreshManagementCategorySelectors()
         const int currentId = m_bomConfigurationComboBox->currentData().toInt();
         m_bomConfigurationComboBox->clear();
         for (const ProductCategoryOption &category : categories) {
+            if (category.name.trimmed() == QStringLiteral("通用")) {
+                continue;
+            }
             for (const BaseConfigurationOption &configuration :
                  m_databaseManager.baseConfigurationsForCategory(category.id)) {
                 m_bomConfigurationComboBox->addItem(
@@ -3239,6 +3558,127 @@ void MainWindow::refreshManagementCategorySelectors()
             m_bomConfigurationComboBox->setCurrentIndex(targetIndex);
         }
     }
+}
+
+void MainWindow::updateInventoryTableColumnWidths()
+{
+    applyAdaptiveTableColumnWidths(
+        m_inventoryTableWidget,
+        {{kInventoryListIdColumn, 88},
+         {kInventoryListCategoryColumn, 124},
+         {kInventoryListMaterialColumn, 112},
+         {kInventoryListColorColumn, 96},
+         {kInventoryListUnitColumn, 76},
+         {kInventoryListUnitPriceColumn, 96},
+         {kInventoryListCurrentQuantityColumn, 88},
+         {kInventoryListInboundQuantityColumn, 88},
+         {kInventoryListOutboundQuantityColumn, 88}},
+        {{kInventoryListNameColumn, 280, 0.46},
+         {kInventoryListSpecColumn, 180, 0.24},
+         {kInventoryListNoteColumn, 220, 0.30}});
+}
+
+void MainWindow::updateResponsiveTableColumnWidths()
+{
+    applyAdaptiveTableColumnWidths(
+        ui != nullptr ? ui->componentTableWidget : nullptr,
+        {{kComponentColorColumn, 96},
+         {kComponentUnitColumn, 76},
+         {kQuantityPerSetColumn, 92},
+         {kUnitPriceColumn, 96},
+         {kSourceTypeColumn, 92},
+         {kTotalRequiredColumn, 96},
+         {kComponentTotalPriceColumn, 104}},
+        {{kComponentNameColumn, 280, 0.48},
+         {kComponentSpecColumn, 150, 0.32},
+         {kComponentMaterialColumn, 108, 0.20}});
+
+    applyAdaptiveTableColumnWidths(
+        ui != nullptr ? ui->shipmentComponentTableWidget : nullptr,
+        {{kShipmentComponentQuantityPerSetColumn, 92},
+         {kShipmentComponentUnitPriceColumn, 96},
+         {kShipmentComponentTotalRequiredColumn, 96},
+         {kShipmentComponentShippedColumn, 96},
+         {kShipmentComponentUnshippedColumn, 96},
+         {kShipmentComponentTotalPriceColumn, 104},
+         {kShipmentComponentSourceColumn, 92}},
+        {{kShipmentComponentNameColumn, 320, 1.0}});
+
+    applyAdaptiveTableColumnWidths(
+        ui != nullptr ? ui->orderListTableWidget : nullptr,
+        {{kQueryOrderIdColumn, 104},
+         {kQueryOrderDateColumn, 118},
+         {kQueryOrderCategoryColumn, 112},
+         {kQueryOrderConfigurationColumn, 112},
+         {kQueryOrderQuantitySetsColumn, 88},
+         {kQueryOrderUnitPriceColumn, 96},
+         {kQueryOrderStatusColumn, 104}},
+        {{kQueryOrderCustomerColumn, 180, 0.34},
+         {kQueryOrderProductModelColumn, 220, 0.38},
+         {kQueryOrderShipmentReadyColumn, 180, 0.28}});
+
+    applyAdaptiveTableColumnWidths(
+        ui != nullptr ? ui->orderDetailComponentTableWidget : nullptr,
+        {{kQueryDetailComponentColorColumn, 96},
+         {kQueryDetailQuantityPerSetColumn, 92},
+         {kQueryDetailTotalRequiredColumn, 96},
+         {kQueryDetailUnitPriceColumn, 96},
+         {kQueryDetailSourceColumn, 118}},
+        {{kQueryDetailComponentNameColumn, 280, 0.48},
+         {kQueryDetailComponentSpecColumn, 150, 0.32},
+         {kQueryDetailComponentMaterialColumn, 108, 0.20}});
+
+    applyAdaptiveTableColumnWidths(
+        ui != nullptr ? ui->orderShipmentHistoryTableWidget : nullptr,
+        {{kQueryShipmentDateColumn, 136},
+         {kQueryShipmentTypeColumn, 112},
+         {kQueryShipmentQuantityColumn, 88}},
+        {{kQueryShipmentComponentColumn, 200, 0.40},
+         {kQueryShipmentNoteColumn, 220, 0.60}});
+
+    applyAdaptiveTableColumnWidths(
+        m_demandSummaryTableWidget,
+        {{kDemandSummaryCategoryColumn, 112},
+         {kDemandSummaryMaterialColumn, 108},
+         {kDemandSummaryColorColumn, 96},
+         {kDemandSummaryUnitColumn, 76},
+         {kDemandSummaryDemandColumn, 96},
+         {kDemandSummaryInventoryColumn, 96},
+         {kDemandSummaryGapColumn, 96}},
+        {{kDemandSummaryNameColumn, 260, 0.65},
+         {kDemandSummarySpecColumn, 170, 0.35}});
+
+    applyAdaptiveTableColumnWidths(
+        m_inventoryBlockedOrderTableWidget,
+        {{kReadyOrderIdColumn, 104},
+         {kReadyOrderCategoryColumn, 112},
+         {kReadyOrderConfigurationColumn, 112},
+         {kReadyOrderQuantityColumn, 88}},
+        {{kReadyOrderCustomerColumn, 180, 0.30},
+         {kReadyOrderSkuColumn, 220, 0.40},
+         {kReadyOrderStatusColumn, 180, 0.30}});
+
+    applyAdaptiveTableColumnWidths(
+        m_inventoryReadyOrderTableWidget,
+        {{kReadyOrderIdColumn, 104},
+         {kReadyOrderCategoryColumn, 112},
+         {kReadyOrderConfigurationColumn, 112},
+         {kReadyOrderQuantityColumn, 88}},
+        {{kReadyOrderCustomerColumn, 180, 0.30},
+         {kReadyOrderSkuColumn, 220, 0.40},
+         {kReadyOrderStatusColumn, 180, 0.30}});
+
+    applyAdaptiveTableColumnWidths(
+        m_structuredShipmentReadyTableWidget,
+        {{kReadyOrderIdColumn, 104},
+         {kReadyOrderCategoryColumn, 112},
+         {kReadyOrderConfigurationColumn, 112},
+         {kReadyOrderQuantityColumn, 88}},
+        {{kReadyOrderCustomerColumn, 180, 0.30},
+         {kReadyOrderSkuColumn, 220, 0.40},
+         {kReadyOrderStatusColumn, 180, 0.30}});
+
+    updateInventoryTableColumnWidths();
 }
 
 void MainWindow::loadSkuEditor()
@@ -3269,6 +3709,7 @@ void MainWindow::loadSkuEditor()
 void MainWindow::saveSkuEditor()
 {
     const int categoryId = m_skuCategoryComboBox != nullptr ? m_skuCategoryComboBox->currentData().toInt() : 0;
+    QSet<QString> seenIdentityKeys;
     for (int row = 0; row < m_skuTableWidget->rowCount(); ++row) {
         const QTableWidgetItem *nameItem = m_skuTableWidget->item(row, kSkuEditorNameColumn);
         if (nameItem == nullptr || nameItem->text().trimmed().isEmpty()) {
@@ -3288,6 +3729,12 @@ void MainWindow::saveSkuEditor()
             m_skuTableWidget->item(row, kSkuEditorLampshadePriceColumn) != nullptr
                 ? m_skuTableWidget->item(row, kSkuEditorLampshadePriceColumn)->text().toDouble()
                 : 0.0;
+        const QString identityKey =
+            productSkuIdentityKey(categoryId, sku.skuName, sku.lampshadeName, sku.lampshadeUnitPrice);
+        if (seenIdentityKeys.contains(identityKey)) {
+            continue;
+        }
+        seenIdentityKeys.insert(identityKey);
         if (!m_databaseManager.saveProductSku(sku)) {
             QMessageBox::critical(this, QStringLiteral("保存失败"), m_databaseManager.lastError());
             return;
@@ -3337,10 +3784,10 @@ void MainWindow::loadConfigurationEditor()
         m_configurationTableWidget->setItem(row,
                                             kConfigurationEditorNameColumn,
                                             new QTableWidgetItem(configuration.configName));
-        m_configurationTableWidget->setItem(
-            row,
-            kConfigurationEditorPriceColumn,
-            new QTableWidgetItem(QString::number(configuration.configPrice, 'f', 2)));
+        auto *priceItem =
+            new QTableWidgetItem(QString::number(configuration.configPrice, 'f', 2));
+        priceItem->setFlags(priceItem->flags() & ~Qt::ItemIsEditable);
+        m_configurationTableWidget->setItem(row, kConfigurationEditorPriceColumn, priceItem);
         m_configurationTableWidget->setItem(
             row,
             kConfigurationEditorSortColumn,
@@ -3356,7 +3803,11 @@ void MainWindow::saveConfigurationEditor()
     for (int row = 0; row < m_configurationTableWidget->rowCount(); ++row) {
         const QTableWidgetItem *codeItem =
             m_configurationTableWidget->item(row, kConfigurationEditorCodeColumn);
-        if (codeItem == nullptr || codeItem->text().trimmed().isEmpty()) {
+        const QTableWidgetItem *nameItem =
+            m_configurationTableWidget->item(row, kConfigurationEditorNameColumn);
+        const QString configCode = codeItem != nullptr ? codeItem->text().trimmed() : QString();
+        const QString configName = nameItem != nullptr ? nameItem->text().trimmed() : QString();
+        if (configCode.isEmpty() && configName.isEmpty()) {
             continue;
         }
 
@@ -3365,19 +3816,9 @@ void MainWindow::saveConfigurationEditor()
             m_configurationTableWidget->item(row, kConfigurationEditorIdColumn);
         configuration.id = idItem != nullptr ? idItem->text().toInt() : 0;
         configuration.productCategoryId = categoryId;
-        configuration.configCode = codeItem->text().trimmed();
-        configuration.configName =
-            m_configurationTableWidget->item(row, kConfigurationEditorNameColumn) != nullptr
-                ? m_configurationTableWidget->item(row, kConfigurationEditorNameColumn)
-                      ->text()
-                      .trimmed()
-                : QString();
-        configuration.configPrice =
-            m_configurationTableWidget->item(row, kConfigurationEditorPriceColumn) != nullptr
-                ? m_configurationTableWidget->item(row, kConfigurationEditorPriceColumn)
-                      ->text()
-                      .toDouble()
-                : 0.0;
+        configuration.configCode = configCode;
+        configuration.configName = configName;
+        configuration.configPrice = 0.0;
         configuration.sortOrder =
             m_configurationTableWidget->item(row, kConfigurationEditorSortColumn) != nullptr
                 ? m_configurationTableWidget->item(row, kConfigurationEditorSortColumn)
@@ -3404,11 +3845,12 @@ void MainWindow::addConfigurationEditorRow()
     m_configurationTableWidget->setItem(row, kConfigurationEditorIdColumn, idItem);
     m_configurationTableWidget->setItem(row, kConfigurationEditorCodeColumn, new QTableWidgetItem);
     m_configurationTableWidget->setItem(row, kConfigurationEditorNameColumn, new QTableWidgetItem);
-    m_configurationTableWidget->setItem(
-        row, kConfigurationEditorPriceColumn, new QTableWidgetItem(QStringLiteral("0.00")));
+    auto *priceItem = new QTableWidgetItem(QStringLiteral("0.00"));
+    priceItem->setFlags(priceItem->flags() & ~Qt::ItemIsEditable);
+    m_configurationTableWidget->setItem(row, kConfigurationEditorPriceColumn, priceItem);
     m_configurationTableWidget->setItem(
         row, kConfigurationEditorSortColumn, new QTableWidgetItem(QString::number(row + 1)));
-    m_configurationTableWidget->setCurrentCell(row, kConfigurationEditorCodeColumn);
+    m_configurationTableWidget->setCurrentCell(row, kConfigurationEditorNameColumn);
 }
 
 void MainWindow::loadBomEditor()
@@ -3491,6 +3933,7 @@ void MainWindow::saveBomEditor()
         return;
     }
 
+    loadProductDataPage();
     loadBomEditor();
     rebuildStructuredOrderComponents();
     showStatusMessage(QStringLiteral("基础配置 BOM 已保存"), 3000);
@@ -3626,18 +4069,13 @@ void MainWindow::setupQueryOutputControls()
 
     m_exportOrderSummaryButton = new QPushButton(QStringLiteral("导出订单汇总信息"), ui->queryGroupBox);
     m_exportShipmentListButton = new QPushButton(QStringLiteral("导出发货清单"), ui->queryGroupBox);
-    m_printCurrentOrderButton = new QPushButton(QStringLiteral("打印当前订单"), ui->queryGroupBox);
     m_exportOrderSummaryButton->setProperty("buttonRole", "secondary");
     m_exportShipmentListButton->setProperty("buttonRole", "secondary");
-    m_printCurrentOrderButton->setProperty("buttonRole", "secondary");
 
     ui->queryFilterLayout->addWidget(new QLabel(QStringLiteral("开始日期"), ui->queryGroupBox), 1, 0);
     ui->queryFilterLayout->addWidget(m_queryStartDateEdit, 1, 1);
     ui->queryFilterLayout->addWidget(new QLabel(QStringLiteral("结束日期"), ui->queryGroupBox), 1, 2);
     ui->queryFilterLayout->addWidget(m_queryEndDateEdit, 1, 3);
-    ui->queryFilterLayout->addWidget(m_exportOrderSummaryButton, 1, 5);
-    ui->queryFilterLayout->addWidget(m_exportShipmentListButton, 1, 6);
-    ui->queryFilterLayout->addWidget(m_printCurrentOrderButton, 1, 7);
 }
 
 void MainWindow::setupInventoryOutputControls()
@@ -3867,6 +4305,7 @@ bool MainWindow::writeCsvFile(const QString &dialogTitle,
         return value;
     };
 
+    file.write("\xEF\xBB\xBF", 3);
     QTextStream stream(&file);
     stream.setEncoding(QStringConverter::Utf8);
     QStringList escapedHeaders;
@@ -3911,10 +4350,10 @@ void MainWindow::exportOrderSummaryCsv()
                       QStringLiteral("客户"),
                       QStringLiteral("产品类型"),
                       QStringLiteral("具体型号"),
-                      QStringLiteral("基础配置"),
-                      QStringLiteral("数量"),
-                      QStringLiteral("发货状态"),
-                      QStringLiteral("可发货")},
+                     QStringLiteral("基础配置"),
+                     QStringLiteral("数量"),
+                     QStringLiteral("发货状态"),
+                     QStringLiteral("备注")},
                      rows)) {
         showStatusMessage(QStringLiteral("订单汇总已导出"), 3000);
     }
@@ -4007,85 +4446,6 @@ void MainWindow::exportCurrentOrderShipmentCsv()
     }
 }
 
-QString MainWindow::buildPrintableOrderText(int orderId)
-{
-    const StructuredOrderSummary order = structuredOrderSummaryById(orderId);
-    if (order.id <= 0) {
-        return QString();
-    }
-
-    QString text;
-    QTextStream stream(&text);
-    stream << "订单打印单" << Qt::endl
-           << "订单ID: " << order.id << Qt::endl
-           << "订单日期: " << order.orderDate << Qt::endl
-           << "客户: " << order.customerName << Qt::endl
-           << "产品类型: " << order.productCategoryName << Qt::endl
-           << "具体型号: " << order.productSkuName << Qt::endl
-           << "基础配置: " << order.baseConfigurationName << Qt::endl
-           << "数量: " << order.orderQuantity << Qt::endl
-           << "订单状态: " << structuredOrderShipmentStatusText(order) << Qt::endl
-           << Qt::endl
-           << "订单组件" << Qt::endl;
-
-    for (const StructuredOrderComponentSnapshot &component :
-         m_databaseManager.structuredOrderComponents(orderId)) {
-        stream << component.componentName;
-        if (!component.componentSpec.trimmed().isEmpty()) {
-            stream << " | " << component.componentSpec;
-        }
-        stream << " | 需求数量 " << component.requiredQuantity
-               << " | 已发数量 " << component.shippedQuantity
-               << " | 未发数量 " << component.unshippedQuantity << Qt::endl;
-    }
-
-    const QList<OrderShipmentRecord> shipments = m_databaseManager.structuredOrderShipments(orderId);
-    if (!shipments.isEmpty()) {
-        stream << Qt::endl << "发货记录" << Qt::endl;
-        for (const OrderShipmentRecord &record : shipments) {
-            stream << record.shipmentDate << " | " << record.shipmentType << " | "
-                   << record.shipmentQuantity;
-            if (!record.note.trimmed().isEmpty()) {
-                stream << " | " << record.note;
-            }
-            stream << Qt::endl;
-        }
-    }
-
-    return text;
-}
-
-void MainWindow::printCurrentOrder()
-{
-    if (!ensureDatabaseOpenForAction(QStringLiteral("打印订单"))) {
-        return;
-    }
-
-    const int orderId = currentQueryOrderId();
-    if (orderId <= 0) {
-        QMessageBox::warning(this, QStringLiteral("打印失败"), QStringLiteral("请先在订单查询中选择一个订单。"));
-        return;
-    }
-
-    const QString printableText = buildPrintableOrderText(orderId);
-    if (printableText.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("打印失败"), QStringLiteral("未找到当前订单内容。"));
-        return;
-    }
-
-    QPrinter printer(QPrinter::HighResolution);
-    QPrintDialog dialog(&printer, this);
-    dialog.setWindowTitle(QStringLiteral("打印订单"));
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-
-    QTextDocument document;
-    document.setPlainText(printableText);
-    document.print(&printer);
-    showStatusMessage(QStringLiteral("订单打印任务已发送"), 3000);
-}
-
 void MainWindow::loadInventoryPage()
 {
     if (!m_databaseManager.isDatabaseOpen()) {
@@ -4106,16 +4466,20 @@ void MainWindow::loadInventoryPage()
         return;
     }
 
+    m_databaseManager.upsertProductCategoryByName(QStringLiteral("通用"));
+
     if (m_inventoryCategoryComboBox != nullptr) {
         const QList<ProductCategoryOption> categories = m_databaseManager.productCategories();
         const int currentCategoryId = m_inventoryCategoryComboBox->currentData().toInt();
         const QSignalBlocker blocker(m_inventoryCategoryComboBox);
         m_inventoryCategoryComboBox->clear();
-        m_inventoryCategoryComboBox->addItem(QStringLiteral("选择产品类型"), 0);
         for (const ProductCategoryOption &category : categories) {
             m_inventoryCategoryComboBox->addItem(category.name, category.id);
         }
-        const int index = m_inventoryCategoryComboBox->findData(currentCategoryId);
+        int index = m_inventoryCategoryComboBox->findData(currentCategoryId);
+        if (index < 0) {
+            index = m_inventoryCategoryComboBox->findText(QStringLiteral("通用"));
+        }
         m_inventoryCategoryComboBox->setCurrentIndex(index >= 0 ? index : 0);
         refreshComboBoxPopupWidth(m_inventoryCategoryComboBox);
     }
@@ -4135,9 +4499,37 @@ void MainWindow::loadInventoryPage()
         for (const ProductComponentOption &option : options) {
             m_inventoryComponentComboBox->addItem(
                 inventoryOptionDisplayText(option, priceVariantsByIdentity), option.id);
-            m_inventoryComponentComboBox->setItemData(m_inventoryComponentComboBox->count() - 1,
+            const int optionIndex = m_inventoryComponentComboBox->count() - 1;
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      option.productCategoryId,
+                                                      kInventoryOptionCategoryRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      option.componentSpec,
+                                                      kInventoryOptionSpecRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      option.material,
+                                                      kInventoryOptionMaterialRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      option.color,
+                                                      kInventoryOptionColorRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      option.unitName,
+                                                      kInventoryOptionUnitRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
                                                       option.unitPrice,
-                                                      Qt::UserRole + 1);
+                                                      kInventoryOptionPriceRole);
+        }
+        for (const InventoryItemData &item : m_databaseManager.inventoryItems()) {
+            const int optionIndex = m_inventoryComponentComboBox->findData(item.id);
+            if (optionIndex < 0) {
+                continue;
+            }
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      item.currentQuantity,
+                                                      kInventoryOptionCurrentQuantityRole);
+            m_inventoryComponentComboBox->setItemData(optionIndex,
+                                                      item.note,
+                                                      kInventoryOptionNoteRole);
         }
         int index = m_inventoryComponentComboBox->findData(currentId);
         if (index < 0 && !currentText.trimmed().isEmpty()) {
@@ -4157,7 +4549,8 @@ void MainWindow::loadInventoryPage()
 
 void MainWindow::populateInventoryForm(const InventoryItemData &item)
 {
-    if (m_inventoryComponentComboBox == nullptr || m_inventoryQuantitySpinBox == nullptr) {
+    if (m_inventoryComponentComboBox == nullptr || m_inventoryInboundQuantitySpinBox == nullptr
+        || m_inventoryOutboundQuantitySpinBox == nullptr) {
         return;
     }
 
@@ -4190,7 +4583,11 @@ void MainWindow::populateInventoryForm(const InventoryItemData &item)
     if (m_inventoryUnitPriceSpinBox != nullptr) {
         m_inventoryUnitPriceSpinBox->setValue(item.unitPrice);
     }
-    m_inventoryQuantitySpinBox->setValue(item.currentQuantity);
+    if (m_inventoryCurrentQuantityLineEdit != nullptr) {
+        m_inventoryCurrentQuantityLineEdit->setText(QString::number(item.currentQuantity));
+    }
+    m_inventoryInboundQuantitySpinBox->setValue(0);
+    m_inventoryOutboundQuantitySpinBox->setValue(0);
     if (m_inventoryNoteLineEdit != nullptr) {
         m_inventoryNoteLineEdit->setText(item.note);
     }
@@ -4198,7 +4595,8 @@ void MainWindow::populateInventoryForm(const InventoryItemData &item)
 
 void MainWindow::clearInventoryForm()
 {
-    if (m_inventoryComponentComboBox == nullptr || m_inventoryQuantitySpinBox == nullptr) {
+    if (m_inventoryComponentComboBox == nullptr || m_inventoryInboundQuantitySpinBox == nullptr
+        || m_inventoryOutboundQuantitySpinBox == nullptr) {
         return;
     }
 
@@ -4206,7 +4604,8 @@ void MainWindow::clearInventoryForm()
     m_inventoryComponentComboBox->setCurrentIndex(0);
     m_inventoryComponentComboBox->setEditText(QString());
     if (m_inventoryCategoryComboBox != nullptr) {
-        m_inventoryCategoryComboBox->setCurrentIndex(0);
+        const int commonIndex = m_inventoryCategoryComboBox->findText(QStringLiteral("通用"));
+        m_inventoryCategoryComboBox->setCurrentIndex(commonIndex >= 0 ? commonIndex : 0);
     }
     if (m_inventoryComponentSpecLineEdit != nullptr) {
         m_inventoryComponentSpecLineEdit->clear();
@@ -4223,7 +4622,11 @@ void MainWindow::clearInventoryForm()
     if (m_inventoryUnitPriceSpinBox != nullptr) {
         m_inventoryUnitPriceSpinBox->setValue(kDefaultNonZeroUnitPrice);
     }
-    m_inventoryQuantitySpinBox->setValue(0);
+    if (m_inventoryCurrentQuantityLineEdit != nullptr) {
+        m_inventoryCurrentQuantityLineEdit->setText(QStringLiteral("0"));
+    }
+    m_inventoryInboundQuantitySpinBox->setValue(0);
+    m_inventoryOutboundQuantitySpinBox->setValue(0);
     if (m_inventoryNoteLineEdit != nullptr) {
         m_inventoryNoteLineEdit->clear();
     }
@@ -4231,7 +4634,8 @@ void MainWindow::clearInventoryForm()
 
 void MainWindow::saveInventoryForm()
 {
-    if (m_inventoryComponentComboBox == nullptr || m_inventoryQuantitySpinBox == nullptr) {
+    if (m_inventoryComponentComboBox == nullptr || m_inventoryInboundQuantitySpinBox == nullptr
+        || m_inventoryOutboundQuantitySpinBox == nullptr) {
         return;
     }
 
@@ -4256,7 +4660,11 @@ void MainWindow::saveInventoryForm()
         m_inventoryUnitLineEdit != nullptr ? m_inventoryUnitLineEdit->text().trimmed() : QString();
     item.unitPrice =
         m_inventoryUnitPriceSpinBox != nullptr ? m_inventoryUnitPriceSpinBox->value() : 0.0;
-    item.currentQuantity = m_inventoryQuantitySpinBox->value();
+    item.currentQuantity = m_inventoryCurrentQuantityLineEdit != nullptr
+                               ? m_inventoryCurrentQuantityLineEdit->text().toInt()
+                               : 0;
+    item.inboundQuantity = m_inventoryInboundQuantitySpinBox->value();
+    item.outboundQuantity = m_inventoryOutboundQuantitySpinBox->value();
     item.note =
         m_inventoryNoteLineEdit != nullptr ? m_inventoryNoteLineEdit->text().trimmed() : QString();
 
@@ -4299,7 +4707,17 @@ void MainWindow::refreshInventoryList()
         m_inventoryTableWidget->setItem(
             row, kInventoryListUnitPriceColumn, new QTableWidgetItem(QString::number(item.unitPrice, 'f', 2)));
         m_inventoryTableWidget->setItem(
-            row, kInventoryListQuantityColumn, new QTableWidgetItem(QString::number(item.currentQuantity)));
+            row,
+            kInventoryListCurrentQuantityColumn,
+            new QTableWidgetItem(QString::number(item.currentQuantity)));
+        m_inventoryTableWidget->setItem(
+            row,
+            kInventoryListInboundQuantityColumn,
+            new QTableWidgetItem(QString::number(item.inboundQuantity)));
+        m_inventoryTableWidget->setItem(
+            row,
+            kInventoryListOutboundQuantityColumn,
+            new QTableWidgetItem(QString::number(item.outboundQuantity)));
         m_inventoryTableWidget->setItem(row, kInventoryListNoteColumn, new QTableWidgetItem(item.note));
     }
     applyDefaultAscendingSort(m_inventoryTableWidget, kInventoryListIdColumn);
@@ -4349,9 +4767,10 @@ void MainWindow::refreshInventoryDemandPage()
             m_inventoryBlockedOrderTableWidget->setItem(row,
                                                         kReadyOrderQuantityColumn,
                                                         new QTableWidgetItem(QString::number(order.orderQuantity)));
-            m_inventoryBlockedOrderTableWidget->setItem(row,
-                                                        kReadyOrderStatusColumn,
-                                                        new QTableWidgetItem(QStringLiteral("不可发货")));
+            m_inventoryBlockedOrderTableWidget->setItem(
+                row,
+                kReadyOrderStatusColumn,
+                new QTableWidgetItem(structuredOrderReadinessText(order)));
         }
     }
     applyDefaultAscendingSort(m_inventoryBlockedOrderTableWidget, kReadyOrderIdColumn);
@@ -4423,8 +4842,11 @@ void MainWindow::refreshInventoryDemandShortageTable()
         if (order.id > 0) {
             QHash<QString, InventoryDemandSummaryRow> demandMap;
             QHash<QString, int> inventoryQuantities;
+            const int commonCategoryId = m_databaseManager.productCategoryIdByName(QStringLiteral("通用"));
             for (const InventoryItemData &item : m_databaseManager.inventoryItems()) {
-                const QString key = inventoryDemandIdentityKey(item.productCategoryId,
+                const int keyCategoryId =
+                    item.productCategoryId == commonCategoryId ? order.productCategoryId : item.productCategoryId;
+                const QString key = inventoryDemandIdentityKey(keyCategoryId,
                                                                item.componentName,
                                                                item.componentSpec,
                                                                item.material,
@@ -4521,6 +4943,14 @@ void MainWindow::refreshShipmentReadyTables()
     const QList<StructuredOrderSummary> orders = m_databaseManager.structuredOrders(true);
     m_structuredShipmentReadyOrders = orders;
 
+    QList<StructuredOrderSummary> readyOrders;
+    readyOrders.reserve(orders.size());
+    for (const StructuredOrderSummary &order : orders) {
+        if (order.shipmentReady && !order.isCompleted) {
+            readyOrders.append(order);
+        }
+    }
+
     auto populateReadyTable = [](QTableWidget *tableWidget, const QList<StructuredOrderSummary> &rows) {
         if (tableWidget == nullptr) {
             return;
@@ -4543,15 +4973,16 @@ void MainWindow::refreshShipmentReadyTables()
             tableWidget->setItem(row,
                                  kReadyOrderQuantityColumn,
                                  new QTableWidgetItem(QString::number(order.orderQuantity)));
-            tableWidget->setItem(row,
-                                 kReadyOrderStatusColumn,
-                                 new QTableWidgetItem(structuredOrderReadinessText(order)));
+            tableWidget->setItem(
+                row,
+                kReadyOrderStatusColumn,
+                new QTableWidgetItem(structuredOrderReadinessText(order)));
         }
         applyDefaultAscendingSort(tableWidget, kReadyOrderIdColumn);
     };
 
-    populateReadyTable(m_inventoryReadyOrderTableWidget, orders);
-    populateReadyTable(m_structuredShipmentReadyTableWidget, orders);
+    populateReadyTable(m_inventoryReadyOrderTableWidget, readyOrders);
+    populateReadyTable(m_structuredShipmentReadyTableWidget, readyOrders);
     refreshInventoryDemandPage();
     refreshStructuredShipmentReadySummary();
     if (m_structuredShipmentReadyTableWidget != nullptr) {
@@ -4695,7 +5126,7 @@ void MainWindow::refreshStructuredShipmentDetails()
     }
 
     ui->shipmentOrderStatusValueLabel->setText(
-        QStringLiteral("订单 #%1 | %2 | %3 | %4 | %5 套 | 可整套再发 %6 | 配置价格 %7 | %8")
+        QStringLiteral("订单 #%1 | %2 | %3 | %4 | %5 套 | 待发 %6 套 | 配置价格 %7 | %8 | %9")
             .arg(currentOrder.id)
             .arg(currentOrder.customerName)
             .arg(currentOrder.productSkuName)
@@ -4703,7 +5134,8 @@ void MainWindow::refreshStructuredShipmentDetails()
             .arg(currentOrder.orderQuantity)
             .arg(currentOrder.availableSetShipments)
             .arg(QString::number(currentOrder.configPrice, 'f', 2))
-            .arg(structuredOrderShipmentStatusText(currentOrder)));
+            .arg(structuredOrderShipmentStatusText(currentOrder))
+            .arg(structuredOrderReadinessText(currentOrder)));
     setStructuredShipmentComponentRows(m_databaseManager.structuredOrderComponents(orderId));
 }
 
@@ -4739,6 +5171,10 @@ void MainWindow::setQueryShipmentRows(const QList<OrderShipmentRecord> &records)
             row, kQueryShipmentDateColumn, new QTableWidgetItem(record.shipmentDate));
         ui->orderShipmentHistoryTableWidget->setItem(
             row, kQueryShipmentTypeColumn, new QTableWidgetItem(record.shipmentType));
+        ui->orderShipmentHistoryTableWidget->setItem(
+            row,
+            kQueryShipmentComponentColumn,
+            new QTableWidgetItem(record.componentName));
         ui->orderShipmentHistoryTableWidget->setItem(
             row,
             kQueryShipmentQuantityColumn,
@@ -4856,7 +5292,7 @@ void MainWindow::refreshShipmentDetails()
     }
 
     ui->shipmentOrderStatusValueLabel->setText(
-        QStringLiteral("订单 #%1 | %2 | %3 | %4 | 总套数 %5 | 可整套再发 %6 | 配置价格 %7 | 状态：%8")
+        QStringLiteral("订单 #%1 | %2 | %3 | %4 | 总套数 %5 | 待发 %6 套 | 配置价格 %7 | 状态：%8")
             .arg(currentOrder.id)
             .arg(currentOrder.customerName)
             .arg(currentOrder.productSkuName)

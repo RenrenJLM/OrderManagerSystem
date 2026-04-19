@@ -2,10 +2,71 @@
 
 #include <QFile>
 #include <QHash>
+#include <QSet>
+#include <initializer_list>
 #include <QStringConverter>
 #include <QTextStream>
 
 namespace {
+struct ImportHeaders
+{
+    QString name;
+    QString isActive;
+
+    QString productCategoryName;
+    QString skuName;
+    QString lampshadeName;
+    QString lampshadeUnitPrice;
+
+    QString configCode;
+    QString configName;
+    QString configPrice;
+    QString sortOrder;
+
+    QString componentName;
+    QString componentSpec;
+    QString material;
+    QString color;
+    QString unitName;
+    QString quantity;
+    QString unitAmount;
+
+    QString unitPrice;
+    QString inboundQuantity;
+    QString outboundQuantity;
+    QString currentQuantity;
+    QString note;
+};
+
+const ImportHeaders kHeaders{
+    QStringLiteral("名称"),
+    QStringLiteral("是否启用"),
+
+    QStringLiteral("产品类型"),
+    QStringLiteral("具体型号"),
+    QStringLiteral("默认灯罩"),
+    QStringLiteral("灯罩单价"),
+
+    QStringLiteral("配置代码"),
+    QStringLiteral("配置名称"),
+    QStringLiteral("配置价格"),
+    QStringLiteral("排序"),
+
+    QStringLiteral("组件名称"),
+    QStringLiteral("规格"),
+    QStringLiteral("材质"),
+    QStringLiteral("颜色"),
+    QStringLiteral("单位"),
+    QStringLiteral("数量"),
+    QStringLiteral("单价"),
+
+    QStringLiteral("单价"),
+    QStringLiteral("入库数量"),
+    QStringLiteral("出库数量"),
+    QStringLiteral("当前库存"),
+    QStringLiteral("备注")
+};
+
 QString normalizedCell(const QStringList &row, int index)
 {
     if (index < 0 || index >= row.size()) {
@@ -17,6 +78,26 @@ QString normalizedCell(const QStringList &row, int index)
 QString configGroupKey(int productCategoryId, const QString &configCode)
 {
     return QString::number(productCategoryId) + QLatin1Char('\x1f') + configCode.trimmed();
+}
+
+QString productSkuIdentityKey(int productCategoryId,
+                              const QString &skuName,
+                              const QString &lampshadeName,
+                              double lampshadeUnitPrice)
+{
+    return QString::number(productCategoryId) + QLatin1Char('\x1f')
+           + skuName.trimmed() + QLatin1Char('\x1f')
+           + lampshadeName.trimmed() + QLatin1Char('\x1f')
+           + QString::number(lampshadeUnitPrice, 'f', 4);
+}
+
+QString joinColumnNames(std::initializer_list<QString> columnNames)
+{
+    QStringList parts;
+    for (const QString &columnName : columnNames) {
+        parts.append(columnName);
+    }
+    return parts.join(QStringLiteral("、"));
 }
 }
 
@@ -259,11 +340,11 @@ QString DataImporter::formatRowError(int rowNumber, const QString &reason) const
 DataImporter::ImportResult DataImporter::importProductCategories(const ParsedCsv &csv)
 {
     ImportResult result;
-    const int nameIndex = columnIndex(csv.headers, QStringLiteral("name"));
-    const int isActiveIndex = columnIndex(csv.headers, QStringLiteral("is_active"));
+    const int nameIndex = columnIndex(csv.headers, kHeaders.name);
+    const int isActiveIndex = columnIndex(csv.headers, kHeaders.isActive);
     if (nameIndex < 0) {
         result.failedCount = 1;
-        result.failureReasons.append(QStringLiteral("列头必须包含 name。"));
+        result.failureReasons.append(QStringLiteral("列头必须包含 %1。").arg(kHeaders.name));
         return result;
     }
 
@@ -280,7 +361,8 @@ DataImporter::ImportResult DataImporter::importProductCategories(const ParsedCsv
         const bool isActive = parseBooleanField(normalizedCell(row, isActiveIndex), true, &boolOk);
         if (!boolOk) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("is_active 只能是 0/1/true/false。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 只能是 0/1/true/false。").arg(kHeaders.isActive)));
             continue;
         }
 
@@ -299,18 +381,22 @@ DataImporter::ImportResult DataImporter::importProductCategories(const ParsedCsv
 DataImporter::ImportResult DataImporter::importProductSkus(const ParsedCsv &csv)
 {
     ImportResult result;
-    const int categoryNameIndex = columnIndex(csv.headers, QStringLiteral("product_category_name"));
-    const int skuNameIndex = columnIndex(csv.headers, QStringLiteral("sku_name"));
-    const int lampshadeNameIndex = columnIndex(csv.headers, QStringLiteral("lampshade_name"));
-    const int lampshadePriceIndex = columnIndex(csv.headers, QStringLiteral("lampshade_unit_price"));
-    const int isActiveIndex = columnIndex(csv.headers, QStringLiteral("is_active"));
+    const int categoryNameIndex = columnIndex(csv.headers, kHeaders.productCategoryName);
+    const int skuNameIndex = columnIndex(csv.headers, kHeaders.skuName);
+    const int lampshadeNameIndex = columnIndex(csv.headers, kHeaders.lampshadeName);
+    const int lampshadePriceIndex = columnIndex(csv.headers, kHeaders.lampshadeUnitPrice);
+    const int isActiveIndex = columnIndex(csv.headers, kHeaders.isActive);
     if (categoryNameIndex < 0 || skuNameIndex < 0 || lampshadeNameIndex < 0 || lampshadePriceIndex < 0) {
         result.failedCount = 1;
-        result.failureReasons.append(
-            QStringLiteral("列头必须包含 product_category_name, sku_name, lampshade_name, lampshade_unit_price。"));
+        result.failureReasons.append(QStringLiteral("列头必须包含 %1。")
+                                         .arg(joinColumnNames({kHeaders.productCategoryName,
+                                                               kHeaders.skuName,
+                                                               kHeaders.lampshadeName,
+                                                               kHeaders.lampshadeUnitPrice})));
         return result;
     }
 
+    QSet<QString> importedIdentityKeys;
     for (int i = 0; i < csv.rows.size(); ++i) {
         const QStringList &row = csv.rows.at(i);
         const int rowNumber = i + 2;
@@ -345,7 +431,8 @@ DataImporter::ImportResult DataImporter::importProductSkus(const ParsedCsv &csv)
         const bool isActive = parseBooleanField(normalizedCell(row, isActiveIndex), true, &boolOk);
         if (!boolOk) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("is_active 只能是 0/1/true/false。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 只能是 0/1/true/false。").arg(kHeaders.isActive)));
             continue;
         }
 
@@ -355,6 +442,13 @@ DataImporter::ImportResult DataImporter::importProductSkus(const ParsedCsv &csv)
         sku.lampshadeName = lampshadeName;
         sku.lampshadeUnitPrice = lampshadeUnitPrice;
         sku.isActive = isActive;
+        const QString identityKey =
+            productSkuIdentityKey(categoryId, sku.skuName, sku.lampshadeName, sku.lampshadeUnitPrice);
+        if (importedIdentityKeys.contains(identityKey)) {
+            ++result.skippedCount;
+            continue;
+        }
+        importedIdentityKeys.insert(identityKey);
         if (!m_databaseManager->upsertProductSkuByNaturalKey(sku)) {
             ++result.failedCount;
             result.failureReasons.append(formatRowError(rowNumber, m_databaseManager->lastError()));
@@ -370,16 +464,18 @@ DataImporter::ImportResult DataImporter::importProductSkus(const ParsedCsv &csv)
 DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCsv &csv)
 {
     ImportResult result;
-    const int categoryNameIndex = columnIndex(csv.headers, QStringLiteral("product_category_name"));
-    const int configCodeIndex = columnIndex(csv.headers, QStringLiteral("config_code"));
-    const int configNameIndex = columnIndex(csv.headers, QStringLiteral("config_name"));
-    const int configPriceIndex = columnIndex(csv.headers, QStringLiteral("config_price"));
-    const int sortOrderIndex = columnIndex(csv.headers, QStringLiteral("sort_order"));
-    const int isActiveIndex = columnIndex(csv.headers, QStringLiteral("is_active"));
-    if (categoryNameIndex < 0 || configCodeIndex < 0 || configNameIndex < 0 || configPriceIndex < 0) {
+    const int categoryNameIndex = columnIndex(csv.headers, kHeaders.productCategoryName);
+    const int configCodeIndex = columnIndex(csv.headers, kHeaders.configCode);
+    const int configNameIndex = columnIndex(csv.headers, kHeaders.configName);
+    const int sortOrderIndex = columnIndex(csv.headers, kHeaders.sortOrder);
+    const int isActiveIndex = columnIndex(csv.headers, kHeaders.isActive);
+    if (categoryNameIndex < 0 || configNameIndex < 0) {
         result.failedCount = 1;
         result.failureReasons.append(
-            QStringLiteral("列头必须包含 product_category_name, config_code, config_name, config_price。"));
+            QStringLiteral("列头必须包含 %1。%2、%3 可留空。")
+                .arg(joinColumnNames({kHeaders.productCategoryName, kHeaders.configName}),
+                     kHeaders.configCode,
+                     kHeaders.configPrice));
         return result;
     }
 
@@ -393,16 +489,9 @@ DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCs
             ++result.skippedCount;
             continue;
         }
-        if (categoryName.isEmpty() || configCode.isEmpty() || configName.isEmpty()) {
+        if (categoryName.isEmpty() || configName.isEmpty()) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("产品类型、配置代码、配置名称不能为空。")));
-            continue;
-        }
-
-        double configPrice = 0.0;
-        if (!parseNonNegativeDoubleField(normalizedCell(row, configPriceIndex), &configPrice)) {
-            ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("配置价格必须是大于等于 0 的数字。")));
+            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("产品类型、配置名称不能为空。")));
             continue;
         }
 
@@ -417,7 +506,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCs
         const QString sortOrderText = normalizedCell(row, sortOrderIndex);
         if (!sortOrderText.isEmpty() && !parseNonNegativeIntegerField(sortOrderText, &sortOrder)) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("sort_order 必须是大于等于 0 的整数。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 必须是大于等于 0 的整数。").arg(kHeaders.sortOrder)));
             continue;
         }
 
@@ -425,7 +515,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCs
         const bool isActive = parseBooleanField(normalizedCell(row, isActiveIndex), true, &boolOk);
         if (!boolOk) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("is_active 只能是 0/1/true/false。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 只能是 0/1/true/false。").arg(kHeaders.isActive)));
             continue;
         }
 
@@ -433,7 +524,7 @@ DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCs
         configuration.productCategoryId = categoryId;
         configuration.configCode = configCode;
         configuration.configName = configName;
-        configuration.configPrice = configPrice;
+        configuration.configPrice = 0.0;
         configuration.sortOrder = sortOrder;
         configuration.isActive = isActive;
         if (!m_databaseManager->upsertBaseConfigurationByNaturalKey(configuration)) {
@@ -451,16 +542,20 @@ DataImporter::ImportResult DataImporter::importBaseConfigurations(const ParsedCs
 DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const ParsedCsv &csv)
 {
     ImportResult result;
-    const int categoryNameIndex = columnIndex(csv.headers, QStringLiteral("product_category_name"));
-    const int configCodeIndex = columnIndex(csv.headers, QStringLiteral("config_code"));
-    const int componentNameIndex = columnIndex(csv.headers, QStringLiteral("component_name"));
-    const int quantityIndex = columnIndex(csv.headers, QStringLiteral("quantity"));
-    const int unitAmountIndex = columnIndex(csv.headers, QStringLiteral("unit_amount"));
+    const int categoryNameIndex = columnIndex(csv.headers, kHeaders.productCategoryName);
+    const int configCodeIndex = columnIndex(csv.headers, kHeaders.configCode);
+    const int componentNameIndex = columnIndex(csv.headers, kHeaders.componentName);
+    const int quantityIndex = columnIndex(csv.headers, kHeaders.quantity);
+    const int unitAmountIndex = columnIndex(csv.headers, kHeaders.unitAmount);
     if (categoryNameIndex < 0 || configCodeIndex < 0 || componentNameIndex < 0 || quantityIndex < 0
         || unitAmountIndex < 0) {
         result.failedCount = 1;
-        result.failureReasons.append(
-            QStringLiteral("列头必须包含 product_category_name, config_code, component_name, quantity, unit_amount。"));
+        result.failureReasons.append(QStringLiteral("列头必须包含 %1。")
+                                         .arg(joinColumnNames({kHeaders.productCategoryName,
+                                                               kHeaders.configCode,
+                                                               kHeaders.componentName,
+                                                               kHeaders.quantity,
+                                                               kHeaders.unitAmount})));
         return result;
     }
 
@@ -531,7 +626,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const Parsed
 
         if (unitName.isEmpty()) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("unit_name 不能为空。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 不能为空。").arg(kHeaders.unitName)));
             hasValidationError = true;
             continue;
         }
@@ -539,7 +635,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const Parsed
         int quantity = 0;
         if (!parseIntegerField(quantityText, &quantity) || quantity <= 0) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("quantity 必须是大于 0 的整数。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 必须是大于 0 的整数。").arg(kHeaders.quantity)));
             hasValidationError = true;
             continue;
         }
@@ -547,7 +644,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const Parsed
         double unitAmount = 0.0;
         if (!parseNonNegativeDoubleField(unitAmountText, &unitAmount)) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("unit_amount 必须是大于等于 0 的数字。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 必须是大于等于 0 的数字。").arg(kHeaders.unitAmount)));
             hasValidationError = true;
             continue;
         }
@@ -565,7 +663,8 @@ DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const Parsed
             component.sortOrder = 0;
         } else if (!parseNonNegativeIntegerField(sortOrderText, &component.sortOrder)) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("sort_order 必须是大于等于 0 的整数。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 必须是大于等于 0 的整数。").arg(kHeaders.sortOrder)));
             hasValidationError = true;
             continue;
         }
@@ -605,85 +704,95 @@ DataImporter::ImportResult DataImporter::importBaseConfigurationBom(const Parsed
 DataImporter::ImportResult DataImporter::importInventoryItems(const ParsedCsv &csv)
 {
     ImportResult result;
-    const int categoryNameIndex = columnIndex(csv.headers, QStringLiteral("product_category_name"));
-    const int componentNameIndex = columnIndex(csv.headers, QStringLiteral("component_name"));
-    const int unitPriceIndex = columnIndex(csv.headers, QStringLiteral("unit_price"));
-    const int quantityIndex = columnIndex(csv.headers, QStringLiteral("current_quantity"));
-    if (categoryNameIndex < 0 || componentNameIndex < 0 || unitPriceIndex < 0 || quantityIndex < 0) {
+    const int categoryNameIndex = columnIndex(csv.headers, kHeaders.productCategoryName);
+    const int componentNameIndex = columnIndex(csv.headers, kHeaders.componentName);
+    const int componentSpecIndex = columnIndex(csv.headers, kHeaders.componentSpec);
+    const int materialIndex = columnIndex(csv.headers, kHeaders.material);
+    const int colorIndex = columnIndex(csv.headers, kHeaders.color);
+    const int unitNameIndex = columnIndex(csv.headers, kHeaders.unitName);
+    const int unitPriceIndex = columnIndex(csv.headers, kHeaders.unitPrice);
+    const int noteIndex = columnIndex(csv.headers, kHeaders.note);
+    const int inboundQuantityIndex = columnIndex(csv.headers, kHeaders.inboundQuantity);
+    const int outboundQuantityIndex = columnIndex(csv.headers, kHeaders.outboundQuantity);
+    const int legacyQuantityIndex = columnIndex(csv.headers, kHeaders.currentQuantity);
+    if (componentNameIndex < 0 || unitPriceIndex < 0
+        || (inboundQuantityIndex < 0 && outboundQuantityIndex < 0 && legacyQuantityIndex < 0)) {
         result.failedCount = 1;
         result.failureReasons.append(
-            QStringLiteral("列头必须包含 product_category_name, component_name, unit_price, current_quantity。"));
+            QStringLiteral("列头必须包含 %1、%2，且至少包含 %3、%4、%5 之一。")
+                .arg(kHeaders.componentName,
+                     kHeaders.unitPrice,
+                     kHeaders.inboundQuantity,
+                     kHeaders.outboundQuantity,
+                     kHeaders.currentQuantity));
         return result;
     }
 
     for (int i = 0; i < csv.rows.size(); ++i) {
         const QStringList &row = csv.rows.at(i);
         const int rowNumber = i + 2;
-        const QString categoryName = normalizedCell(row, categoryNameIndex);
+        QString categoryName = normalizedCell(row, categoryNameIndex);
         const QString componentName = normalizedCell(row, componentNameIndex);
         if (categoryName.isEmpty() && componentName.isEmpty()) {
             ++result.skippedCount;
             continue;
         }
-        if (categoryName.isEmpty() || componentName.isEmpty()) {
+        if (componentName.isEmpty()) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("产品类型、物料名称不能为空。")));
+            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("物料名称不能为空。")));
             continue;
         }
-
-        if (row.size() < 5) {
-            ++result.failedCount;
-            result.failureReasons.append(
-                formatRowError(rowNumber, QStringLiteral("库存行缺少关键列，至少需要物料名称、单位、单价、库存。")));
-            continue;
+        if (categoryName.isEmpty()) {
+            categoryName = QStringLiteral("通用");
         }
-
-        QString note;
-        QStringList middleColumns;
-        QString unitName;
-        QString unitPriceText;
-        QString quantityText;
-        if (row.size() >= 6) {
-            note = row.at(row.size() - 1).trimmed();
-            quantityText = row.at(row.size() - 2).trimmed();
-            unitPriceText = row.at(row.size() - 3).trimmed();
-            unitName = row.at(row.size() - 4).trimmed();
-            middleColumns = row.mid(2, row.size() - 6);
-        } else {
-            quantityText = row.at(row.size() - 1).trimmed();
-            unitPriceText = row.at(row.size() - 2).trimmed();
-            unitName = row.at(row.size() - 3).trimmed();
-            middleColumns = row.mid(2, row.size() - 5);
-        }
-
-        if (!normalizeOptionalMiddleColumns(&middleColumns, 3)) {
-            ++result.failedCount;
-            result.failureReasons.append(
-                formatRowError(rowNumber, QStringLiteral("库存描述列过多，无法确定规格、材质、颜色的映射。")));
-            continue;
-        }
+        const QString unitName = normalizedCell(row, unitNameIndex);
+        const QString unitPriceText = normalizedCell(row, unitPriceIndex);
+        const QString legacyQuantityText =
+            legacyQuantityIndex >= 0 ? normalizedCell(row, legacyQuantityIndex) : QString();
+        const QString note = normalizedCell(row, noteIndex);
 
         if (unitName.isEmpty()) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("unit_name 不能为空。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 不能为空。").arg(kHeaders.unitName)));
             continue;
         }
 
         double unitPrice = 0.0;
         if (!parseDoubleField(unitPriceText, &unitPrice) || unitPrice <= 0.0) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("unit_price 必须是大于 0 的数字。")));
+            result.failureReasons.append(
+                formatRowError(rowNumber, QStringLiteral("%1 必须是大于 0 的数字。").arg(kHeaders.unitPrice)));
             continue;
         }
 
-        int currentQuantity = 0;
-        if (!parseNonNegativeIntegerField(quantityText, &currentQuantity)) {
+        int inboundQuantity = 0;
+        int outboundQuantity = 0;
+        const QString inboundText =
+            inboundQuantityIndex >= 0 ? normalizedCell(row, inboundQuantityIndex) : legacyQuantityText;
+        const QString outboundText =
+            outboundQuantityIndex >= 0 ? normalizedCell(row, outboundQuantityIndex) : QString();
+
+        if (!inboundText.isEmpty() && !parseNonNegativeIntegerField(inboundText, &inboundQuantity)) {
             ++result.failedCount;
-            result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("current_quantity 必须是大于等于 0 的整数。")));
+            result.failureReasons.append(formatRowError(
+                rowNumber, QStringLiteral("%1 必须是大于等于 0 的整数。").arg(kHeaders.inboundQuantity)));
+            continue;
+        }
+        if (!outboundText.isEmpty() && !parseNonNegativeIntegerField(outboundText, &outboundQuantity)) {
+            ++result.failedCount;
+            result.failureReasons.append(formatRowError(
+                rowNumber, QStringLiteral("%1 必须是大于等于 0 的整数。").arg(kHeaders.outboundQuantity)));
             continue;
         }
 
-        const int categoryId = m_databaseManager->productCategoryIdByName(categoryName);
+        int categoryId = m_databaseManager->productCategoryIdByName(categoryName);
+        if (categoryId <= 0 && !m_databaseManager->upsertProductCategoryByName(categoryName)) {
+            ++result.failedCount;
+            result.failureReasons.append(formatRowError(rowNumber, m_databaseManager->lastError()));
+            continue;
+        }
+        categoryId = m_databaseManager->productCategoryIdByName(categoryName);
         if (categoryId <= 0) {
             ++result.failedCount;
             result.failureReasons.append(formatRowError(rowNumber, QStringLiteral("产品类型不存在：%1").arg(categoryName)));
@@ -693,12 +802,14 @@ DataImporter::ImportResult DataImporter::importInventoryItems(const ParsedCsv &c
         InventoryItemData item;
         item.productCategoryId = categoryId;
         item.componentName = componentName;
-        item.componentSpec = middleColumns.value(0).trimmed();
-        item.material = middleColumns.value(1).trimmed();
-        item.color = middleColumns.value(2).trimmed();
+        item.componentSpec = normalizedCell(row, componentSpecIndex);
+        item.material = normalizedCell(row, materialIndex);
+        item.color = normalizedCell(row, colorIndex);
         item.unitName = unitName;
         item.unitPrice = unitPrice;
-        item.currentQuantity = currentQuantity;
+        item.currentQuantity = 0;
+        item.inboundQuantity = inboundQuantity;
+        item.outboundQuantity = outboundQuantity;
         item.note = note;
         if (!m_databaseManager->upsertInventoryItemByNaturalKey(item)) {
             ++result.failedCount;
